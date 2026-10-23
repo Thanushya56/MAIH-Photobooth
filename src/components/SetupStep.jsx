@@ -201,19 +201,32 @@ export default function SetupStep({
               />
               <div>
                 <p style={{ color: 'var(--cyan)', fontFamily: 'var(--font-accent)', fontSize: '0.95rem', marginBottom: 6 }}>
-                  ✓ Official MAIH Poster Template loaded
+                  {templateDataUrl === '/poster-template-cutout.png'
+                    ? '✓ Official MAIH Poster Template active'
+                    : '✓ Custom Poster Template loaded'}
                 </p>
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                  Official Microsoft AI Innovators Hub template.<br />
-                  Your photo is placed inside the central hexagonal neon frame.
+                  {templateDataUrl === '/poster-template-cutout.png'
+                    ? 'Official Microsoft AI Innovators Hub template with hexagonal neon frame.'
+                    : 'Custom Canva background active. Click zone to change.'}
                 </p>
-                <button
-                  className="btn btn-sm"
-                  style={{ marginTop: 10, background: 'rgba(0,245,255,0.1)', color: 'var(--cyan)', border: '1px solid rgba(0,245,255,0.3)' }}
-                  onClick={e => { e.stopPropagation(); setTemplateDataUrl('/poster-template-cutout.png'); }}
-                >
-                  ↺ Reset to Official Template
-                </button>
+                {templateDataUrl !== '/poster-template-cutout.png' ? (
+                  <button
+                    className="btn btn-sm"
+                    style={{ marginTop: 10, background: 'rgba(0,245,255,0.1)', color: 'var(--cyan)', border: '1px solid rgba(0,245,255,0.3)' }}
+                    onClick={e => { e.stopPropagation(); setTemplateDataUrl('/poster-template-cutout.png'); }}
+                  >
+                    ↺ Reset to Official Template
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-sm"
+                    style={{ marginTop: 10, background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)', border: '1px solid rgba(255,255,255,0.15)' }}
+                    onClick={e => { e.stopPropagation(); tmplRef.current?.click(); }}
+                  >
+                    🎨 Upload Custom Canva Template
+                  </button>
+                )}
               </div>
             </div>
           ) : (
@@ -261,16 +274,20 @@ export default function SetupStep({
                 style={{ width: 100, height: 100, objectFit: 'contain', borderRadius: 12, border: '2px solid rgba(0,245,255,0.4)', background: 'rgba(255,255,255,0.04)' }}
               />
               <span style={{ color: 'var(--cyan-dim)', fontFamily: 'var(--font-accent)', fontSize: '0.9rem' }}>
-                ✓ Official MAIH Logo active — click to replace
+                {logoDataUrl === '/logo-mark.png'
+                  ? '✓ Official MAIH Logo active — click to replace'
+                  : '✓ Custom Community Logo active — click to replace'}
               </span>
-              <button
-                type="button"
-                className="btn btn-sm"
-                style={{ background: 'rgba(0,245,255,0.1)', color: 'var(--cyan)', border: '1px solid rgba(0,245,255,0.3)', fontSize: '0.75rem', padding: '4px 10px' }}
-                onClick={e => { e.stopPropagation(); setLogoDataUrl('/logo-mark.png'); }}
-              >
-                ↺ Reset to Official Logo
-              </button>
+              {logoDataUrl !== '/logo-mark.png' && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ background: 'rgba(0,245,255,0.1)', color: 'var(--cyan)', border: '1px solid rgba(0,245,255,0.3)', fontSize: '0.75rem', padding: '4px 10px' }}
+                  onClick={e => { e.stopPropagation(); setLogoDataUrl('/logo-mark.png'); }}
+                >
+                  ↺ Reset to Official Logo
+                </button>
+              )}
             </div>
           ) : (
             <div style={{ pointerEvents: 'none' }}>

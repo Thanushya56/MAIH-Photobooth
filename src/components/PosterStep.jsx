@@ -25,7 +25,9 @@ const LOCAL_API       = '/api/poster';
 
 export default function PosterStep({
   photoDataUrl,
+  logoDataUrl,
   templateDataUrl = '/poster-template-cutout.png',
+  eventName,
   groupSize = 1,
   dirHandle,
   setDirHandle,
@@ -33,6 +35,8 @@ export default function PosterStep({
   addToast,
 }) {
   const canvasRef = useRef(null);
+  const autoSavedForPhotoRef = useRef(null);
+  const uploadedForPhotoRef = useRef(null);
 
   const [loading,      setLoading]      = useState(true);
   const [loadingMsg,   setLoadingMsg]   = useState('GENERATING YOUR POSTER…');
@@ -40,6 +44,15 @@ export default function PosterStep({
   const [shareUrl,     setShareUrl]     = useState(null);
   const [uploading,    setUploading]    = useState(false);
   const [uploadErr,    setUploadErr]    = useState(null);
+  const [serverInfo,   setServerInfo]   = useState(null); // { url, id, ip, port, interfaces }
+  const [customIp,     setCustomIp]     = useState('');
+  const [showNetworkSettings, setShowNetworkSettings] = useState(false);
+  const [ipInput,      setIpInput]      = useState('');
+
+  const customIpRef = useRef(customIp);
+  useEffect(() => {
+    customIpRef.current = customIp;
+  }, [customIp]);
 
   // Auto-save state
   const [autoSaveInfo, setAutoSaveInfo] = useState(null); // { filename, folderName, method }
@@ -47,22 +60,26 @@ export default function PosterStep({
   const [isAutoSaving, setIsAutoSaving] = useState(false);
 
   // ── Auto-upload poster for QR ─────────────────────────────────────
-  const uploadPoster = useCallback(async (dataUrl) => {
+  const uploadPoster = useCallback(async (dataUrl, overrideIp) => {
     if (!dataUrl) return;
     setUploading(true);
     setUploadErr(null);
+
+    const ipToSend = overrideIp !== undefined ? overrideIp : customIpRef.current;
 
     // 1. Try Vite local poster-server (same-WiFi download & local disk backup)
     try {
       const resp = await fetch(LOCAL_API, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ image: dataUrl }),
+        body:    JSON.stringify({ image: dataUrl, customIp: ipToSend || undefined }),
       });
-      if (resp.ok) {
-        const { url } = await resp.json();
-        if (url) {
-          setShareUrl(url);
+      const contentType = resp.headers.get('content-type') || '';
+      if (resp.ok && contentType.includes('application/json')) {
+        const data = await resp.json();
+        if (data.url) {
+          setShareUrl(data.url);
+          setServerInfo(data);
           setUploading(false);
           addToast('QR code ready — scan to download! 🎉', 'success');
           return;
@@ -77,12 +94,17 @@ export default function PosterStep({
         const blob = await res.blob();
         const form = new FormData();
         form.append('image', blob, 'poster.png');
-        const resp = await fetch(UPLOAD_ENDPOINT, { method: 'POST', body: form });
+        const headers = {};
+        if (import.meta.env.VITE_IMGUR_CLIENT_ID) {
+          headers['Authorization'] = `Client-ID ${import.meta.env.VITE_IMGUR_CLIENT_ID}`;
+        }
+        const resp = await fetch(UPLOAD_ENDPOINT, { method: 'POST', body: form, headers });
         if (!resp.ok) throw new Error(`Upload failed: ${resp.statusText}`);
         const json = await resp.json();
         const url  = json?.data?.link || json?.url || null;
         if (!url) throw new Error('Upload service did not return a URL.');
         setShareUrl(url);
+        setUploading(false);
         addToast('Poster uploaded! QR code ready. 🎉', 'success');
         return;
       } catch (err) {
@@ -90,11 +112,19 @@ export default function PosterStep({
         addToast(`Upload failed: ${err.message}`, 'error');
       }
     } else {
-      setUploadErr('No upload service available — download the poster directly.');
+      setUploadErr('Photo booth server not connected. Please make sure "npm run dev" is running in the terminal.');
     }
 
     setUploading(false);
   }, [addToast]);
+
+  function handleApplyIp(ipToApply) {
+    setCustomIp(ipToApply);
+    if (posterUrl) {
+      uploadPoster(posterUrl, ipToApply);
+      addToast(`Updated network IP to ${ipToApply || 'auto-detect'}! 🔄`, 'info');
+    }
+  }
 
   // ── Auto-Save Poster Immediately ──────────────────────────────────
   const triggerAutoSave = useCallback(async (dataUrl, targetDirHandle) => {
@@ -151,15 +181,23 @@ export default function PosterStep({
           photoDataUrl,
           templateDataUrl: templateDataUrl || '/poster-template-cutout.png',
           groupSize,
+          eventName,
+          logoDataUrl,
         });
 
         if (cancelled) return;
         const dataUrl = canvasRef.current.toDataURL('image/png');
         setPosterUrl(dataUrl);
 
-        // Upload to QR service & auto-save immediately
-        uploadPoster(dataUrl);
-        triggerAutoSave(dataUrl, dirHandle);
+        // Upload to QR service & auto-save immediately (only once per unique image)
+        if (uploadedForPhotoRef.current !== dataUrl) {
+          uploadedForPhotoRef.current = dataUrl;
+          uploadPoster(dataUrl);
+        }
+        if (autoSavedForPhotoRef.current !== dataUrl) {
+          autoSavedForPhotoRef.current = dataUrl;
+          triggerAutoSave(dataUrl, dirHandle);
+        }
       } catch (err) {
         console.error('Poster generation error:', err);
         addToast('Failed to generate poster. Please try again.', 'error');
@@ -170,7 +208,7 @@ export default function PosterStep({
 
     run();
     return () => { cancelled = true; };
-  }, [photoDataUrl, templateDataUrl, groupSize, dirHandle, addToast, uploadPoster, triggerAutoSave]);
+  }, [photoDataUrl, templateDataUrl, groupSize, eventName, logoDataUrl, dirHandle, addToast, uploadPoster, triggerAutoSave]);
 
   // ── Manual Download ───────────────────────────────────────────────
   function downloadPoster() {
@@ -185,7 +223,9 @@ export default function PosterStep({
 
   return (
     <div className="glass-card step-card">
-      <h2 className="section-title">Your Poster is Ready! 🎉</h2>
+      <h2 className="section-title">
+        {eventName && eventName !== 'EVENT NAME 2026' ? `${eventName} Poster Ready! 🎉` : 'Your Poster is Ready! 🎉'}
+      </h2>
       <p className="section-subtitle">
         Your poster has been generated and automatically saved to your device.
       </p>
@@ -290,6 +330,48 @@ export default function PosterStep({
               </div>
             )}
 
+            {/* Custom Community Logo in Preview (if uploaded and not default) */}
+            {logoDataUrl && logoDataUrl !== '/logo-mark.png' && (
+              <img
+                src={logoDataUrl}
+                alt="Community Logo"
+                style={{
+                  position: 'absolute',
+                  top: '2.5%',
+                  right: '4.5%',
+                  width: '8%',
+                  height: 'auto',
+                  maxHeight: '6%',
+                  objectFit: 'contain',
+                  zIndex: 3,
+                  filter: 'drop-shadow(0 0 8px rgba(0, 245, 255, 0.6))',
+                }}
+              />
+            )}
+
+            {/* Custom Event Name in Preview (if using custom template or customized event name) */}
+            {eventName && (templateDataUrl !== '/poster-template-cutout.png' || (eventName !== 'EVENT NAME 2026' && eventName.trim())) && (
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: '3.6%',
+                  left: '4%',
+                  right: '4%',
+                  textAlign: 'center',
+                  zIndex: 3,
+                  color: '#ffffff',
+                  fontFamily: 'var(--font-display)',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textShadow: '0 0 10px var(--cyan)',
+                  textTransform: 'uppercase',
+                }}
+              >
+                {eventName}
+              </div>
+            )}
+
             {/* Hidden High-Resolution Canvas for PNG Generation & Download */}
             <canvas
               ref={canvasRef}
@@ -377,60 +459,238 @@ export default function PosterStep({
 
         {/* QR section */}
         <div style={{
-          background: 'rgba(0,0,0,0.3)',
-          border: '1px solid rgba(0,245,255,0.1)',
+          background: 'rgba(0,0,0,0.35)',
+          border: '1px solid rgba(0,245,255,0.18)',
           borderRadius: 'var(--radius-md)',
-          padding: 28,
+          padding: 24,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
         }}>
-          <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1rem', color: 'var(--cyan)', marginBottom: 16 }}>
-            📱 Scan QR to Download on Your Phone
-          </h3>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
+            <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.05rem', color: 'var(--cyan)', margin: 0 }}>
+              📱 Scan QR to Download on Your Phone
+            </h3>
+            {serverInfo?.ip && (
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '4px 10px',
+                borderRadius: 999,
+                background: 'rgba(0, 245, 255, 0.08)',
+                border: '1px solid rgba(0, 245, 255, 0.25)',
+                fontSize: '0.75rem',
+                color: 'var(--cyan)',
+                fontFamily: 'var(--font-accent)',
+              }}>
+                <span className="pulse-dot" style={{ width: 6, height: 6 }} />
+                <span>Wi-Fi: {serverInfo.ip}</span>
+              </div>
+            )}
+          </div>
 
           {uploading && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: 'var(--cyan)', fontFamily: 'var(--font-accent)', marginBottom: 16 }}>
-              <span className="animate-pulse-glow">⏳</span>
-              <span>Preparing QR code…</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: 'var(--cyan)', fontFamily: 'var(--font-accent)', padding: '24px 0' }}>
+              <span className="animate-pulse-glow" style={{ fontSize: '1.5rem' }}>⏳</span>
+              <div>
+                <p style={{ margin: 0, fontWeight: 600 }}>Preparing QR code &amp; mobile download page…</p>
+                <p style={{ margin: '2px 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Setting up instant mobile save &amp; share</p>
+              </div>
             </div>
           )}
 
           {shareUrl && !uploading && (
-            <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-              <QRCodeDisplay url={shareUrl} size={180} />
-              <div style={{ flex: 1, minWidth: 200 }}>
-                <p style={{ color: 'var(--cyan)', fontFamily: 'var(--font-accent)', marginBottom: 8 }}>
-                  ✓ QR code ready!
-                </p>
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: 6, lineHeight: 1.6 }}>
-                  Make sure your phone is on the{' '}
-                  <strong style={{ color: 'var(--text-primary)' }}>same WiFi</strong>{' '}
-                  as this computer, then scan to download the full-resolution poster.
-                </p>
-                <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem', wordBreak: 'break-all', marginBottom: 12 }}>
-                  {shareUrl}
-                </p>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => navigator.clipboard?.writeText(shareUrl).then(() => addToast('URL copied!', 'success'))}
-                >
-                  📋 Copy URL
-                </button>
+            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <QRCodeDisplay url={shareUrl} size={220} allowEnlarge={true} />
+
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <div style={{
+                  background: 'rgba(0, 245, 255, 0.05)',
+                  border: '1px solid rgba(0, 245, 255, 0.15)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '12px 14px',
+                  marginBottom: 14,
+                }}>
+                  <p style={{ color: 'var(--cyan)', fontFamily: 'var(--font-accent)', fontWeight: 700, fontSize: '0.9rem', marginBottom: 4 }}>
+                    ✓ Ready to Scan &amp; Save
+                  </p>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: 1.5, margin: 0 }}>
+                    Point your phone camera (iPhone or Android) to open the mobile poster viewer with <strong>1-tap Save to Photos</strong> &amp; AirDrop/Sharing!
+                  </p>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14, fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ color: 'var(--cyan)' }}>⚡</span>
+                    <span>Instant full-res poster display on phone</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ color: 'var(--cyan)' }}>📸</span>
+                    <span>Save directly to Apple Photos or Android Gallery</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ color: 'var(--cyan)' }}>📶</span>
+                    <span>Same Wi-Fi network: phone must connect to this venue Wi-Fi</span>
+                  </div>
+                </div>
+
+                {/* Helpful Troubleshooting Card */}
+                <div style={{
+                  background: 'rgba(255, 180, 0, 0.08)',
+                  border: '1px solid rgba(255, 180, 0, 0.25)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '10px 14px',
+                  marginBottom: 14,
+                  fontSize: '0.78rem',
+                  color: '#fef08a',
+                  lineHeight: 1.5,
+                }}>
+                  <strong style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, color: '#facc15' }}>
+                    <span>💡</span> Phone says "Site can't be reached"?
+                  </strong>
+                  <div style={{ color: '#fde047' }}>
+                    1. <strong>Phone Wi-Fi:</strong> Check that your phone's Wi-Fi is ON and connected to the same network (not mobile 4G/5G data).<br />
+                    2. <strong>Windows Setting:</strong> In Windows <em>Settings &gt; Network &amp; Internet &gt; Wi-Fi &gt; Manage Known Networks</em>, ensure network profile is set to <strong>Private</strong> (Windows blocks incoming phone connections when set to Public).
+                  </div>
+                </div>
+
+                {/* Action buttons */}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => window.open(shareUrl, '_blank')}
+                    title="Test the mobile download page in a new browser tab"
+                  >
+                    🔗 Test Link
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => navigator.clipboard?.writeText(shareUrl).then(() => addToast('URL copied to clipboard! 📋', 'success'))}
+                  >
+                    📋 Copy Link
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setShowNetworkSettings(prev => !prev)}
+                    style={{ fontSize: '0.76rem' }}
+                  >
+                    ⚙ {showNetworkSettings ? 'Hide Network' : 'Network Settings'}
+                  </button>
+                </div>
+
+                {/* Collapsible Network Settings */}
+                {showNetworkSettings && (
+                  <div style={{
+                    background: 'rgba(5, 8, 16, 0.85)',
+                    border: '1px solid rgba(0, 245, 255, 0.25)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: 14,
+                    marginTop: 10,
+                  }}>
+                    <p style={{ margin: '0 0 8px', fontSize: '0.8rem', color: 'var(--cyan)', fontWeight: 600 }}>
+                      Network Configuration
+                    </p>
+                    <p style={{ margin: '0 0 10px', fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                      If your phone is on a different network or using a hotspot / tunnel, choose or enter your IP below:
+                    </p>
+
+                    {serverInfo?.interfaces && serverInfo.interfaces.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+                        {serverInfo.interfaces.map(iface => (
+                          <button
+                            key={iface.address}
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{
+                              justifyContent: 'space-between',
+                              fontSize: '0.75rem',
+                              padding: '6px 10px',
+                              borderColor: serverInfo.ip === iface.address ? 'var(--cyan)' : 'rgba(255,255,255,0.1)',
+                              background: serverInfo.ip === iface.address ? 'rgba(0, 245, 255, 0.12)' : 'rgba(255,255,255,0.03)',
+                            }}
+                            onClick={() => handleApplyIp(iface.address)}
+                          >
+                            <span><strong>{iface.name}</strong> ({iface.type})</span>
+                            <span style={{ fontFamily: 'monospace', color: serverInfo.ip === iface.address ? 'var(--cyan)' : 'var(--text-muted)' }}>
+                              {iface.address} {iface.recommended ? '★' : ''}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        type="text"
+                        placeholder="Custom IP or Domain (e.g. 192.168.1.100)"
+                        value={ipInput}
+                        onChange={e => setIpInput(e.target.value)}
+                        style={{
+                          flex: 1,
+                          background: 'rgba(0,0,0,0.5)',
+                          border: '1px solid rgba(0,245,255,0.2)',
+                          borderRadius: 6,
+                          padding: '6px 10px',
+                          color: '#fff',
+                          fontSize: '0.75rem',
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ fontSize: '0.75rem', padding: '6px 12px' }}
+                        onClick={() => {
+                          if (ipInput.trim()) handleApplyIp(ipInput.trim());
+                        }}
+                      >
+                        Apply
+                      </button>
+                      {customIp && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: '0.75rem', padding: '6px 10px' }}
+                          onClick={() => {
+                            setIpInput('');
+                            handleApplyIp('');
+                          }}
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
 
           {uploadErr && !uploading && !shareUrl && (
             <div style={{
-              padding: '14px 18px',
-              background: 'rgba(255,165,0,0.07)',
-              border: '1px solid rgba(255,165,0,0.2)',
+              padding: '16px 20px',
+              background: 'rgba(255,165,0,0.08)',
+              border: '1px solid rgba(255,165,0,0.25)',
               borderRadius: 'var(--radius-sm)',
               fontSize: '0.85rem',
               color: '#fbbf24',
               lineHeight: 1.6,
             }}>
-              <strong>⚠ QR sharing unavailable.</strong><br />
-              {uploadErr}<br />
-              Use the <strong>Download PNG</strong> button above to save the poster locally.
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <strong>⚠ QR Code Sharing Offline</strong>
+                {posterUrl && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => uploadPoster(posterUrl)}
+                    style={{ fontSize: '0.75rem', padding: '4px 10px' }}
+                  >
+                    🔄 Retry
+                  </button>
+                )}
+              </div>
+              <p style={{ margin: '0 0 8px' }}>{uploadErr}</p>
+              <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                Tip: Use the <strong>Download PNG</strong> button above to save the poster directly to this computer.
+              </p>
             </div>
           )}
         </div>

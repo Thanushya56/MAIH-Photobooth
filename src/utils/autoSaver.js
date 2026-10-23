@@ -108,11 +108,15 @@ export async function verifyPermission(fileHandle, readWrite = true) {
     if ((await fileHandle.queryPermission(options)) === 'granted') {
       return true;
     }
+    // Only attempt requestPermission if user interaction is currently active (prevents SecurityError)
+    if (typeof navigator !== 'undefined' && navigator.userActivation && !navigator.userActivation.isActive) {
+      return false;
+    }
     if ((await fileHandle.requestPermission(options)) === 'granted') {
       return true;
     }
   } catch (err) {
-    console.warn('Permission query/request error:', err);
+    console.warn('Permission query/request error:', err?.message || err);
   }
   return false;
 }

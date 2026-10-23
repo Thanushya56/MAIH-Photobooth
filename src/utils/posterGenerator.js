@@ -73,6 +73,8 @@ export async function generatePoster(canvas, opts = {}) {
     photoDataUrl,
     templateDataUrl = '/poster-template-cutout.png',
     groupSize = 1,
+    eventName = '',
+    logoDataUrl = null,
   } = opts;
 
   // 1. Setup high-resolution canvas (2× physical pixels: 1446×2048)
@@ -167,6 +169,37 @@ export async function generatePoster(canvas, opts = {}) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(`×${groupSize}`, bx, by);
+    ctx.restore();
+  }
+
+  // 6. Custom Community Logo (if uploaded and not default)
+  if (logoDataUrl && logoDataUrl !== '/logo-mark.png') {
+    try {
+      const logoImg = await loadImg(logoDataUrl);
+      const lw = 56;
+      const lh = 56;
+      const lx = POSTER_W - lw - 32;
+      const ly = 24;
+
+      ctx.save();
+      ctx.shadowColor = '#00f5ff';
+      ctx.shadowBlur = 10;
+      ctx.drawImage(logoImg, lx, ly, lw, lh);
+      ctx.restore();
+    } catch (e) {
+      console.warn('Failed to draw custom logo on canvas:', e);
+    }
+  }
+
+  // 7. Custom Event Name (when using custom Canva template or custom title)
+  if (eventName && (templateDataUrl !== '/poster-template-cutout.png' || (eventName !== 'EVENT NAME 2026' && eventName.trim()))) {
+    ctx.save();
+    ctx.font = 'bold 20px Orbitron, sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#00f5ff';
+    ctx.shadowBlur = 12;
+    ctx.fillText(eventName.toUpperCase(), POSTER_W / 2, POSTER_H - 42);
     ctx.restore();
   }
 }
