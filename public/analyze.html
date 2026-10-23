@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head><title>Frame Analyzer</title></head>
+<body>
+<canvas id="c"></canvas>
+<div id="output" style="white-space: pre; font-family: monospace;"></div>
+<script>
+const img = new Image();
+img.onload = () => {
+  const c = document.getElementById('c');
+  c.width = img.width;
+  c.height = img.height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const idata = ctx.getImageData(0, 0, img.width, img.height);
+  const data = idata.data;
+  
+  // Find checkerboard area in the center.
+  // Checkerboard typically has grey ~200-250 and white ~240-255 or alternating values where r~=g~=b (neutral grey/white).
+  // Outside the frame is either dark neon (blue/purple) or dark background.
+  // Let's sample along horizontal lines in the middle:
+  const midY = Math.round(img.height * 0.4);
+  let minX = img.width, maxX = 0;
+  for (let x = 0; x < img.width; x++) {
+    const idx = (midY * img.width + x) * 4;
+    const r = data[idx], g = data[idx+1], b = data[idx+2];
+    // Check if neutral grey/white (checkerboard)
+    const isNeutral = Math.abs(r - g) < 15 && Math.abs(g - b) < 15 && r > 180;
+    if (isNeutral) {
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+    }
+  }
+  
+  const midX = Math.round(img.width * 0.5);
+  let minY = img.height, maxY = 0;
+  for (let y = 0; y < img.height; y++) {
+    const idx = (y * img.width + midX) * 4;
+    const r = data[idx], g = data[idx+1], b = data[idx+2];
+    const isNeutral = Math.abs(r - g) < 15 && Math.abs(g - b) < 15 && r > 180;
+    if (isNeutral) {
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  
+  // Now let's trace the boundary of the checkerboard area for each row from minY to maxY
+  const boundary = [];
+  for (let y = minY; y <= maxY; y += 4) {
+    let rowLeft = -1, rowRight = -1;
+    for (let x = 0; x < img.width; x++) {
+      const idx = (y * img.width + x) * 4;
+      const r = data[idx], g = data[idx+1], b = data[idx+2];
+      const isNeutral = Math.abs(r - g) < 15 && Math.abs(g - b) < 15 && r > 180;
+      if (isNeutral) {
+        if (rowLeft === -1) rowLeft = x;
+        rowRight = x;
+      }
+    }
+    if (rowLeft !== -1) {
+      boundary.push({ y, left: rowLeft, right: rowRight });
+    }
+  }
+  
+  const result = {
+    imgW: img.width,
+    imgH: img.height,
+    midY_span: { minX, maxX, width: maxX - minX },
+    midX_span: { minY, maxY, height: maxY - minY },
+    boundarySample: boundary.filter((_, i) => i % 5 === 0)
+  };
+  
+  document.getElementById('output').textContent = JSON.stringify(result, null, 2);
+  console.log('Result:', result);
+};
+img.src = '/poster-template.jpg';
+</script>
+</body>
+</html>
