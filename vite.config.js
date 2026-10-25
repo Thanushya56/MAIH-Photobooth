@@ -2,11 +2,79 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
+import { spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 
 // ── In-memory poster store (cleared on server restart) ──────────────────────
 const posterStore = new Map()
+
+// ── Admin Security (Only admin can view all photos; guests cannot) ──────────
+let adminPin = process.env.ADMIN_PIN || 'maih2026'
+
+function isAuthorizedAdmin(req, urlObj) {
+  const reqPin = req.headers['x-admin-pin'] || urlObj.searchParams.get('pin')
+  if (reqPin && reqPin === adminPin) return true
+
+  // Allow localhost requests directly from the host laptop
+  const host = req.headers['host'] || ''
+  const remoteAddr = req.socket?.remoteAddress || ''
+  const isLocalhost = (host.startsWith('localhost') || host.startsWith('127.0.0.1')) &&
+                      (remoteAddr === '127.0.0.1' || remoteAddr === '::1' || remoteAddr === '::ffff:127.0.0.1')
+  if (isLocalhost) return true
+
+  return false
+}
+
+// ── Cloudflare Quick Tunnel state ──────────────────────────────────────────
+let tunnelUrl = null
+let tunnelProcess = null
+
+function startCloudflareTunnel(port) {
+  if (tunnelProcess || process.env.DISABLE_TUNNEL === 'true') return
+
+  try {
+    const cf = spawn('npx', ['-y', 'cloudflared', 'tunnel', '--url', `http://localhost:${port}`], {
+      shell: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    tunnelProcess = cf
+
+    const onData = (data) => {
+      const text = data.toString()
+      const match = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i)
+      if (match && !tunnelUrl) {
+        tunnelUrl = match[0]
+        console.log('\n\x1b[36m%s\x1b[0m', '═══════════════════════════════════════════════════════════════')
+        console.log('\x1b[1m\x1b[32m%s\x1b[0m', '  🚀 PUBLIC QR CODE DIRECT DOWNLOAD IS READY!')
+        console.log('\x1b[33m%s\x1b[0m', '  NO SAME WI-FI NEEDED · WORKS OVER 4G / 5G MOBILE DATA')
+        console.log('\x1b[36m%s\x1b[0m', `  Tunnel: ${tunnelUrl}`)
+        console.log('\x1b[90m%s\x1b[0m', '  Scanned QR code downloads poster directly to attendees\' phones!')
+        console.log('\x1b[36m%s\x1b[0m\n', '═══════════════════════════════════════════════════════════════')
+      }
+    }
+
+    cf.stdout?.on('data', onData)
+    cf.stderr?.on('data', onData)
+
+    cf.on('close', () => {
+      tunnelProcess = null
+      tunnelUrl = null
+    })
+
+    const cleanUp = () => {
+      if (tunnelProcess) {
+        try { tunnelProcess.kill() } catch {}
+        tunnelProcess = null
+      }
+    }
+    process.on('exit', cleanUp)
+    process.on('SIGINT', () => { cleanUp(); process.exit() })
+    process.on('SIGTERM', () => { cleanUp(); process.exit() })
+  } catch (err) {
+    console.warn('Could not launch Cloudflare tunnel:', err.message)
+  }
+}
 
 /**
  * Returns prioritized list of network interfaces on this machine,
@@ -165,6 +233,23 @@ function renderMobilePosterPage(id) {
       color: var(--text-muted);
       letter-spacing: 0.03em;
     }
+    .download-notice {
+      background: rgba(0, 245, 255, 0.12);
+      border: 1px solid rgba(0, 245, 255, 0.35);
+      border-radius: 12px;
+      padding: 10px 14px;
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.82rem;
+      color: var(--text);
+    }
+    .download-notice-icon {
+      font-size: 1.3rem;
+      animation: bounce 1.5s infinite;
+    }
+    @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
     .poster-card {
       width: 100%;
       background: var(--card-bg);
@@ -188,7 +273,7 @@ function renderMobilePosterPage(id) {
     .poster-img {
       width: 100%;
       height: auto;
-      max-height: 54vh;
+      max-height: 52vh;
       object-fit: contain;
       border-radius: 12px;
       display: block;
@@ -256,23 +341,23 @@ function renderMobilePosterPage(id) {
       text-align: center;
       font-size: 0.72rem;
       color: var(--text-muted);
-      padding: 8px 0 12px;
+      letter-spacing: 0.05em;
+      padding: 6px 0 0;
     }
     .toast {
       position: fixed;
       bottom: 24px;
       left: 50%;
-      transform: translateX(-50%) translateY(100px);
-      background: rgba(10, 24, 40, 0.96);
-      border: 1px solid var(--cyan);
-      color: var(--cyan);
+      transform: translateX(-50%) translateY(80px);
+      background: rgba(0, 245, 255, 0.95);
+      color: #030814;
+      font-weight: 700;
+      font-size: 0.9rem;
       padding: 10px 22px;
       border-radius: 999px;
-      font-size: 0.85rem;
-      font-weight: 600;
+      box-shadow: 0 8px 25px rgba(0, 245, 255, 0.5);
       opacity: 0;
       transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-      box-shadow: 0 4px 25px rgba(0, 245, 255, 0.35);
       z-index: 100;
       pointer-events: none;
       white-space: nowrap;
@@ -289,6 +374,14 @@ function renderMobilePosterPage(id) {
       <div class="badge"><span class="badge-dot"></span> Microsoft AI Innovators Hub</div>
       <h1 class="title">Your Event Poster</h1>
       <p class="subtitle">High-Resolution Photo Booth Capture</p>
+    </div>
+
+    <div id="downloadNotice" class="download-notice">
+      <span class="download-notice-icon">⬇</span>
+      <div>
+        <strong>Downloading to your device…</strong><br />
+        <span style="font-size: 0.75rem; color: var(--text-muted);">If not started automatically, tap the button below.</span>
+      </div>
     </div>
 
     <div class="poster-card">
@@ -319,7 +412,7 @@ function renderMobilePosterPage(id) {
     </div>
   </div>
 
-  <div id="toast" class="toast">Poster ready!</div>
+  <div id="toast" class="toast">Poster downloaded!</div>
 
   <script>
     const id = "${id}";
@@ -332,6 +425,13 @@ function renderMobilePosterPage(id) {
       t.classList.add('show');
       setTimeout(() => t.classList.remove('show'), 3200);
     }
+
+    // Auto-download on page load
+    window.addEventListener('DOMContentLoaded', () => {
+      setTimeout(() => {
+        triggerDirectDownload(true);
+      }, 500);
+    });
 
     async function handleShareOrSave() {
       const shareBtn = document.getElementById('shareBtn');
@@ -357,7 +457,6 @@ function renderMobilePosterPage(id) {
         }
       } catch (err) {
         if (err.name === 'AbortError') {
-          // User dismissed share dialog
           shareBtn.innerHTML = originalText;
           shareBtn.style.opacity = '1';
           return;
@@ -366,13 +465,13 @@ function renderMobilePosterPage(id) {
       }
 
       // Fallback: direct download
-      triggerDirectDownload();
+      triggerDirectDownload(false);
       shareBtn.innerHTML = originalText;
       shareBtn.style.opacity = '1';
     }
 
-    function triggerDirectDownload() {
-      showToast('Downloading poster… 💾');
+    function triggerDirectDownload(isAuto) {
+      if (!isAuto) showToast('Downloading poster… 💾');
       const link = document.createElement('a');
       link.href = downloadUrl;
       link.download = 'MAIH-Poster.png';
@@ -434,17 +533,180 @@ function createPosterMiddleware(server) {
     const urlObj = new URL(req.url, 'http://localhost')
     const pathname = urlObj.pathname
 
-    // ── GET /api/poster/network  → returns detected LAN IPs for UI config ────
+    // ── GET /api/poster/network  → returns detected LAN IPs & Cloudflare Tunnel status
     if (req.method === 'GET' && (pathname === '/network' || pathname === '/network/')) {
       const interfaces = getNetworkInterfacesList()
       const selectedIp = getNetworkIP()
       const port = server.httpServer?.address()?.port || server.config?.server?.port || 5173
       res.setHeader('Content-Type', 'application/json')
       res.setHeader('Access-Control-Allow-Origin', '*')
-      return res.end(JSON.stringify({ selectedIp, port, interfaces }))
+      return res.end(JSON.stringify({
+        selectedIp,
+        port,
+        interfaces,
+        tunnelUrl,
+        tunnelActive: !!tunnelUrl,
+        isPublic: !!tunnelUrl,
+      }))
     }
 
-    // ── POST /api/poster  → store image, auto-save disk backup, return { url, id, ip, port, interfaces }
+    // ── POST /api/poster/admin/verify  → verify admin PIN
+    if (req.method === 'POST' && pathname === '/admin/verify') {
+      let body = Buffer.alloc(0)
+      req.on('data', chunk => { body = Buffer.concat([body, chunk]) })
+      req.on('end', () => {
+        try {
+          const { pin } = JSON.parse(body.toString())
+          if (pin === adminPin) {
+            res.setHeader('Content-Type', 'application/json')
+            res.setHeader('Access-Control-Allow-Origin', '*')
+            return res.end(JSON.stringify({ success: true, authorized: true, pin: adminPin }))
+          } else {
+            res.statusCode = 401
+            res.setHeader('Content-Type', 'application/json')
+            res.setHeader('Access-Control-Allow-Origin', '*')
+            return res.end(JSON.stringify({ success: false, error: 'Incorrect Admin PIN' }))
+          }
+        } catch {
+          res.statusCode = 400
+          res.setHeader('Content-Type', 'application/json')
+          return res.end(JSON.stringify({ error: 'Invalid JSON request' }))
+        }
+      })
+      return
+    }
+
+    // ── POST /api/poster/admin/change-pin  → change admin PIN
+    if (req.method === 'POST' && pathname === '/admin/change-pin') {
+      let body = Buffer.alloc(0)
+      req.on('data', chunk => { body = Buffer.concat([body, chunk]) })
+      req.on('end', () => {
+        try {
+          const { currentPin, newPin } = JSON.parse(body.toString())
+          if (currentPin === adminPin && newPin && newPin.trim().length >= 4) {
+            adminPin = newPin.trim()
+            res.setHeader('Content-Type', 'application/json')
+            res.setHeader('Access-Control-Allow-Origin', '*')
+            return res.end(JSON.stringify({ success: true, message: 'Admin PIN updated successfully' }))
+          } else {
+            res.statusCode = 401
+            res.setHeader('Content-Type', 'application/json')
+            res.setHeader('Access-Control-Allow-Origin', '*')
+            return res.end(JSON.stringify({ success: false, error: 'Current PIN incorrect or new PIN too short' }))
+          }
+        } catch {
+          res.statusCode = 400
+          return res.end(JSON.stringify({ error: 'Invalid request' }))
+        }
+      })
+      return
+    }
+
+    // ── GET /api/poster/gallery or /api/poster/list  → returns all generated posters from all devices (ADMIN ONLY)
+    if (req.method === 'GET' && (pathname === '/gallery' || pathname === '/gallery/' || pathname === '/list' || pathname === '/list/')) {
+      if (!isAuthorizedAdmin(req, urlObj)) {
+        res.statusCode = 401
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('Access-Control-Allow-Origin', '*')
+        return res.end(JSON.stringify({ error: 'Access denied: Admin authentication required', requiresAuth: true }))
+      }
+
+      const postersDir = path.resolve('AI Innovators Hub Posters')
+      const posters = []
+
+      if (fs.existsSync(postersDir)) {
+        try {
+          const files = fs.readdirSync(postersDir)
+          for (const file of files) {
+            if (file.toLowerCase().endsWith('.png')) {
+              try {
+                const filePath = path.join(postersDir, file)
+                const stat = fs.statSync(filePath)
+                // Filter out 0-byte or corrupted files
+                if (stat.size > 200) {
+                  posters.push({
+                    id: file.replace(/\.png$/i, ''),
+                    filename: file,
+                    size: stat.size,
+                    createdAt: stat.mtime.toISOString(),
+                    timestamp: stat.mtimeMs,
+                    url: `/api/poster/file/${encodeURIComponent(file)}`,
+                    downloadUrl: `/api/poster/file/${encodeURIComponent(file)}?download=1`,
+                  })
+                }
+              } catch {}
+            }
+          }
+        } catch (e) {
+          console.warn('Error reading posters dir for gallery:', e.message)
+        }
+      }
+
+      // Sort descending (most recent first)
+      posters.sort((a, b) => b.timestamp - a.timestamp)
+
+      res.setHeader('Content-Type', 'application/json')
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      return res.end(JSON.stringify({
+        count: posters.length,
+        folderPath: postersDir,
+        tunnelUrl,
+        posters,
+      }))
+    }
+
+    // ── GET/DELETE /api/poster/file/:filename  → serve or delete image from disk (ADMIN ONLY)
+    const fileMatch = pathname.match(/^\/file\/([^/]+)$/)
+    if (fileMatch) {
+      if (!isAuthorizedAdmin(req, urlObj)) {
+        res.statusCode = 401
+        res.setHeader('Content-Type', 'application/json')
+        res.setHeader('Access-Control-Allow-Origin', '*')
+        return res.end(JSON.stringify({ error: 'Access denied: Admin authentication required' }))
+      }
+      const filename = decodeURIComponent(fileMatch[1])
+      const postersDir = path.resolve('AI Innovators Hub Posters')
+      const safePath = path.join(postersDir, path.basename(filename))
+
+      if (req.method === 'DELETE') {
+        if (fs.existsSync(safePath)) {
+          try {
+            fs.unlinkSync(safePath)
+            res.setHeader('Content-Type', 'application/json')
+            res.setHeader('Access-Control-Allow-Origin', '*')
+            return res.end(JSON.stringify({ success: true, deleted: filename }))
+          } catch (delErr) {
+            res.statusCode = 500
+            return res.end(JSON.stringify({ error: delErr.message }))
+          }
+        }
+        res.statusCode = 404
+        return res.end(JSON.stringify({ error: 'File not found' }))
+      }
+
+      if (req.method === 'GET') {
+        if (fs.existsSync(safePath)) {
+          const isDownload = urlObj.searchParams.get('download') === '1'
+          const stat = fs.statSync(safePath)
+          res.setHeader('Content-Type', 'image/png')
+          res.setHeader('Content-Length', stat.size)
+          if (isDownload) {
+            res.setHeader('Content-Disposition', `attachment; filename="${path.basename(filename)}"`)
+          } else {
+            res.setHeader('Content-Disposition', `inline; filename="${path.basename(filename)}"`)
+          }
+          res.setHeader('Cache-Control', 'public, max-age=86400')
+          res.setHeader('Access-Control-Allow-Origin', '*')
+          const stream = fs.createReadStream(safePath)
+          return stream.pipe(res)
+        }
+        res.statusCode = 404
+        res.setHeader('Content-Type', 'application/json')
+        return res.end(JSON.stringify({ error: 'File not found' }))
+      }
+    }
+
+    // ── POST /api/poster  → store image, auto-save disk backup, return public direct download URL
     if (req.method === 'POST' && (pathname === '' || pathname === '/')) {
       let body = Buffer.alloc(0)
       req.on('data', chunk => { body = Buffer.concat([body, chunk]) })
@@ -481,11 +743,31 @@ function createPosterMiddleware(server) {
           const port = server.httpServer?.address()?.port || server.config?.server?.port || 5173
           const interfaces = getNetworkInterfacesList()
           const ip = customIp || getNetworkIP()
-          const url = `http://${ip}:${port}/api/poster/${id}`
+
+          // Generate direct download URLs and interactive viewer URLs
+          const localDirectDownloadUrl = `http://${ip}:${port}/api/poster/${id}?download=1`
+          const localViewerUrl = `http://${ip}:${port}/api/poster/${id}`
+
+          const directDownloadUrl = tunnelUrl ? `${tunnelUrl}/api/poster/${id}?download=1` : localDirectDownloadUrl
+          const viewerUrl = tunnelUrl ? `${tunnelUrl}/api/poster/${id}` : localViewerUrl
+
+          // Default URL directly triggers download on mobile device!
+          const url = directDownloadUrl
 
           res.setHeader('Content-Type', 'application/json')
           res.setHeader('Access-Control-Allow-Origin', '*')
-          res.end(JSON.stringify({ url, id, ip, port, interfaces }))
+          res.end(JSON.stringify({
+            url,
+            directDownloadUrl,
+            viewerUrl,
+            localUrl: localDirectDownloadUrl,
+            tunnelUrl,
+            isPublic: !!tunnelUrl,
+            id,
+            ip,
+            port,
+            interfaces,
+          }))
         } catch (e) {
           res.statusCode = 500
           res.end(JSON.stringify({ error: e.message }))
@@ -525,14 +807,14 @@ function createPosterMiddleware(server) {
           return res.end(renderMobilePosterPage(id))
         }
 
-        // Binary PNG response
+        // Binary PNG response – direct download
         res.setHeader('Content-Type', 'image/png')
         if (isDownload) {
           res.setHeader('Content-Disposition', 'attachment; filename="MAIH-Poster.png"')
         } else {
           res.setHeader('Content-Disposition', 'inline; filename="MAIH-Poster.png"')
         }
-        res.setHeader('Cache-Control', 'no-store')
+        res.setHeader('Cache-Control', 'public, max-age=86400')
         res.setHeader('Access-Control-Allow-Origin', '*')
         return res.end(data)
       }
@@ -548,9 +830,21 @@ function posterServerPlugin() {
     name: 'poster-server',
     configureServer(server) {
       server.middlewares.use('/api/poster', createPosterMiddleware(server))
+
+      server.httpServer?.once('listening', () => {
+        const addr = server.httpServer.address()
+        const port = typeof addr === 'object' && addr ? addr.port : 5173
+        startCloudflareTunnel(port)
+      })
     },
     configurePreviewServer(server) {
       server.middlewares.use('/api/poster', createPosterMiddleware(server))
+
+      server.httpServer?.once('listening', () => {
+        const addr = server.httpServer.address()
+        const port = typeof addr === 'object' && addr ? addr.port : 5173
+        startCloudflareTunnel(port)
+      })
     },
   }
 }
@@ -561,9 +855,11 @@ export default defineConfig({
   server: {
     host: true, // expose on all interfaces (0.0.0.0) so phones on the same WiFi can connect
     port: 5173,
+    allowedHosts: true, // Allow Cloudflare tunnel (.trycloudflare.com) and mobile devices
   },
   preview: {
     host: true,
     port: 5173,
+    allowedHosts: true,
   },
 })

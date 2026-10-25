@@ -19,9 +19,14 @@ import {
   isFileSystemAccessSupported,
 } from '../utils/autoSaver.js';
 import QRCodeDisplay from './QRCodeDisplay.jsx';
+import {
+  uploadToLocalServer,
+  uploadToImgBB,
+  uploadToImgur,
+  uploadToCustomEndpoint,
+} from '../utils/cloudUploader.js';
 
 const UPLOAD_ENDPOINT = import.meta.env.VITE_UPLOAD_URL || '';
-const LOCAL_API       = '/api/poster';
 
 export default function PosterStep({
   photoDataUrl,
@@ -42,9 +47,21 @@ export default function PosterStep({
   const [loadingMsg,   setLoadingMsg]   = useState('GENERATING YOUR POSTER…');
   const [posterUrl,    setPosterUrl]    = useState(null);
   const [shareUrl,     setShareUrl]     = useState(null);
+  const [directDownloadUrl, setDirectDownloadUrl] = useState(null);
+  const [viewerUrl,    setViewerUrl]    = useState(null);
+  const [localDownloadUrl, setLocalDownloadUrl] = useState(null);
+  const [isPublic,     setIsPublic]     = useState(false);
+  const [provider,     setProvider]     = useState('local');
+  const [downloadMode, setDownloadMode] = useState(() => {
+    return localStorage.getItem('maih_download_mode') || 'direct'; // 'direct' or 'viewer'
+  });
+  const [imgbbKey,     setImgbbKey]     = useState(() => {
+    return localStorage.getItem('maih_imgbb_key') || import.meta.env.VITE_IMGBB_API_KEY || '';
+  });
+  const [imgbbInput,   setImgbbInput]   = useState(imgbbKey);
   const [uploading,    setUploading]    = useState(false);
   const [uploadErr,    setUploadErr]    = useState(null);
-  const [serverInfo,   setServerInfo]   = useState(null); // { url, id, ip, port, interfaces }
+  const [serverInfo,   setServerInfo]   = useState(null); // { url, id, ip, port, interfaces, tunnelUrl, isPublic }
   const [customIp,     setCustomIp]     = useState('');
   const [showNetworkSettings, setShowNetworkSettings] = useState(false);
   const [ipInput,      setIpInput]      = useState('');
@@ -59,70 +76,147 @@ export default function PosterStep({
   const [autoSaveErr,  setAutoSaveErr]  = useState(null);
   const [isAutoSaving, setIsAutoSaving] = useState(false);
 
-  // ── Auto-upload poster for QR ─────────────────────────────────────
+  // ── Auto-upload poster for QR (Direct download & Public Internet) ─
   const uploadPoster = useCallback(async (dataUrl, overrideIp) => {
     if (!dataUrl) return;
     setUploading(true);
     setUploadErr(null);
 
     const ipToSend = overrideIp !== undefined ? overrideIp : customIpRef.current;
+    const activeDownloadMode = localStorage.getItem('maih_download_mode') || downloadMode;
 
-    // 1. Try Vite local poster-server (same-WiFi download & local disk backup)
-    try {
-      const resp = await fetch(LOCAL_API, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ image: dataUrl, customIp: ipToSend || undefined }),
-      });
-      const contentType = resp.headers.get('content-type') || '';
-      if (resp.ok && contentType.includes('application/json')) {
-        const data = await resp.json();
-        if (data.url) {
-          setShareUrl(data.url);
-          setServerInfo(data);
-          setUploading(false);
-          addToast('QR code ready — scan to download! 🎉', 'success');
-          return;
-        }
-      }
-    } catch { /* Local server not available */ }
-
-    // 2. Optional VITE_UPLOAD_URL fallback
-    if (UPLOAD_ENDPOINT) {
+    // 1. Try ImgBB if API key is provided
+    const activeImgbbKey = localStorage.getItem('maih_imgbb_key') || imgbbKey;
+    if (activeImgbbKey) {
       try {
-        const res  = await fetch(dataUrl);
-        const blob = await res.blob();
-        const form = new FormData();
-        form.append('image', blob, 'poster.png');
-        const headers = {};
-        if (import.meta.env.VITE_IMGUR_CLIENT_ID) {
-          headers['Authorization'] = `Client-ID ${import.meta.env.VITE_IMGUR_CLIENT_ID}`;
-        }
-        const resp = await fetch(UPLOAD_ENDPOINT, { method: 'POST', body: form, headers });
-        if (!resp.ok) throw new Error(`Upload failed: ${resp.statusText}`);
-        const json = await resp.json();
-        const url  = json?.data?.link || json?.url || null;
-        if (!url) throw new Error('Upload service did not return a URL.');
-        setShareUrl(url);
+        const res = await uploadToImgBB(dataUrl, activeImgbbKey);
+        setDirectDownloadUrl(res.directDownloadUrl);
+        setViewerUrl(res.viewerUrl);
+        setShareUrl(activeDownloadMode === 'direct' ? res.directDownloadUrl : res.viewerUrl);
+        setIsPublic(true);
+        setProvider('imgbb');
+        // Also sync copy to admin server so organizer has a complete archive
+        uploadToLocalServer(dataUrl, ipToSend).catch(() => {});
         setUploading(false);
-        addToast('Poster uploaded! QR code ready. 🎉', 'success');
+        addToast('ImgBB CDN ready — scan to download directly! 🌐🎉', 'success');
         return;
       } catch (err) {
-        setUploadErr(err.message);
-        addToast(`Upload failed: ${err.message}`, 'error');
+        console.warn('ImgBB upload error, falling back to local server:', err.message);
       }
-    } else {
+    }
+
+    // 2. Try Imgur if Client-ID is provided
+    if (import.meta.env.VITE_IMGUR_CLIENT_ID) {
+      try {
+        const res = await uploadToImgur(dataUrl, import.meta.env.VITE_IMGUR_CLIENT_ID);
+        setDirectDownloadUrl(res.directDownloadUrl);
+        setViewerUrl(res.viewerUrl);
+        setShareUrl(activeDownloadMode === 'direct' ? res.directDownloadUrl : res.viewerUrl);
+        setIsPublic(true);
+        setProvider('imgur');
+        uploadToLocalServer(dataUrl, ipToSend).catch(() => {});
+        setUploading(false);
+        addToast('Imgur upload ready — scan to download directly! 🌐🎉', 'success');
+        return;
+      } catch (err) {
+        console.warn('Imgur upload error, falling back to local server:', err.message);
+      }
+    }
+
+    // 3. Try custom UPLOAD_ENDPOINT if provided
+    if (UPLOAD_ENDPOINT) {
+      try {
+        const res = await uploadToCustomEndpoint(dataUrl, UPLOAD_ENDPOINT);
+        setDirectDownloadUrl(res.directDownloadUrl);
+        setViewerUrl(res.viewerUrl);
+        setShareUrl(activeDownloadMode === 'direct' ? res.directDownloadUrl : res.viewerUrl);
+        setIsPublic(true);
+        setProvider('custom');
+        uploadToLocalServer(dataUrl, ipToSend).catch(() => {});
+        setUploading(false);
+        addToast('Cloud upload ready — scan to download directly! 🌐🎉', 'success');
+        return;
+      } catch (err) {
+        console.warn('Custom upload error, falling back to local server:', err.message);
+      }
+    }
+
+    // 4. Default: Local poster-server with automatic Cloudflare Tunnel
+    try {
+      const res = await uploadToLocalServer(dataUrl, ipToSend);
+      setDirectDownloadUrl(res.directDownloadUrl);
+      setViewerUrl(res.viewerUrl);
+      setLocalDownloadUrl(res.localUrl);
+      setIsPublic(res.isPublic);
+      setServerInfo(res.serverInfo);
+      setProvider(res.isPublic ? 'tunnel' : 'local');
+
+      const targetUrl = activeDownloadMode === 'direct' ? res.directDownloadUrl : res.viewerUrl;
+      setShareUrl(targetUrl);
+      setUploading(false);
+
+      if (res.isPublic) {
+        addToast('Public QR ready — scan to download (No Wi-Fi needed)! 🌐🚀', 'success');
+      } else {
+        addToast('QR code ready — scan to download! 🎉', 'success');
+      }
+      return;
+    } catch (err) {
+      console.warn('Local server upload error:', err.message);
       setUploadErr('Photo booth server not connected. Please make sure "npm run dev" is running in the terminal.');
     }
 
     setUploading(false);
-  }, [addToast]);
+  }, [addToast, downloadMode, imgbbKey]);
+
+  function handleToggleDownloadMode(newMode) {
+    setDownloadMode(newMode);
+    localStorage.setItem('maih_download_mode', newMode);
+    if (newMode === 'direct' && directDownloadUrl) {
+      setShareUrl(directDownloadUrl);
+      addToast('QR Code updated: Direct Download on scan ⚡', 'info');
+    } else if (newMode === 'viewer' && viewerUrl) {
+      setShareUrl(viewerUrl);
+      addToast('QR Code updated: Mobile Viewer on scan 📱', 'info');
+    }
+  }
+
+  function handleSaveImgbbKey(keyToSave) {
+    const trimmed = keyToSave.trim();
+    setImgbbKey(trimmed);
+    if (trimmed) {
+      localStorage.setItem('maih_imgbb_key', trimmed);
+      addToast('ImgBB API key saved! Uploading poster… 🌐', 'success');
+    } else {
+      localStorage.removeItem('maih_imgbb_key');
+      addToast('ImgBB API key removed. Using Cloudflare Tunnel / Local. 🔄', 'info');
+    }
+    if (posterUrl) {
+      uploadPoster(posterUrl);
+    }
+  }
 
   function handleApplyIp(ipToApply) {
     setCustomIp(ipToApply);
     if (posterUrl) {
       uploadPoster(posterUrl, ipToApply);
       addToast(`Updated network IP to ${ipToApply || 'auto-detect'}! 🔄`, 'info');
+    }
+  }
+
+  function handleSwitchToLocalWifi() {
+    if (localDownloadUrl) {
+      setShareUrl(localDownloadUrl);
+      setIsPublic(false);
+      addToast('QR switched to Local Wi-Fi link 📶', 'info');
+    }
+  }
+
+  function handleSwitchToPublicInternet() {
+    if (directDownloadUrl) {
+      setShareUrl(downloadMode === 'direct' ? directDownloadUrl : viewerUrl);
+      setIsPublic(true);
+      addToast('QR switched to Public Internet link (No Wi-Fi needed) 🌐', 'info');
     }
   }
 
@@ -210,7 +304,9 @@ export default function PosterStep({
     return () => { cancelled = true; };
   }, [photoDataUrl, templateDataUrl, groupSize, eventName, logoDataUrl, dirHandle, addToast, uploadPoster, triggerAutoSave]);
 
-  // ── Manual Download ───────────────────────────────────────────────
+  // ── Manual Download & Mobile Share ────────────────────────────────
+  const [canShare] = useState(() => typeof navigator !== 'undefined' && Boolean(navigator.share));
+
   function downloadPoster() {
     if (!posterUrl) return;
     const filename = autoSaveInfo?.filename || formatPosterFilename();
@@ -219,6 +315,43 @@ export default function PosterStep({
     a.download = filename;
     a.click();
     addToast(`Poster downloaded: ${filename}! 🎉`, 'success');
+  }
+
+  async function handleShareOrSave() {
+    if (!posterUrl) return;
+    const filename = autoSaveInfo?.filename || formatPosterFilename();
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        const res = await fetch(posterUrl);
+        const blob = await res.blob();
+        const file = new File([blob], filename, { type: 'image/png' });
+
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            title: 'My AI Poster - Microsoft AI Innovators Hub',
+            text: `Check out my official poster from ${eventName || 'Microsoft AI Innovators Hub'}! 🚀✨`,
+            files: [file],
+          });
+          addToast('Poster shared! 📲', 'success');
+          return;
+        } else {
+          await navigator.share({
+            title: 'My AI Poster - Microsoft AI Innovators Hub',
+            text: `Check out my official poster from ${eventName || 'Microsoft AI Innovators Hub'}! 🚀✨`,
+            url: shareUrl || directDownloadUrl || window.location.href,
+          });
+          addToast('Poster link shared! 📲', 'success');
+          return;
+        }
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      console.warn('Native share failed, downloading instead:', err);
+    }
+
+    // Fallback: standard file download
+    downloadPoster();
   }
 
   return (
@@ -438,19 +571,30 @@ export default function PosterStep({
 
         {/* Action buttons */}
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', maxWidth: 520, margin: '0 auto 32px' }}>
+          {canShare && (
+            <button
+              id="share-poster-btn"
+              className="btn btn-primary btn-lg"
+              style={{ flex: 2, minWidth: 180 }}
+              onClick={handleShareOrSave}
+              disabled={!posterUrl}
+            >
+              📲 Save to Photos / Share
+            </button>
+          )}
           <button
             id="download-poster-btn"
-            className="btn btn-primary btn-lg"
-            style={{ flex: 2, minWidth: 180 }}
+            className={`btn ${canShare ? 'btn-secondary' : 'btn-primary'} btn-lg`}
+            style={{ flex: canShare ? 1.5 : 2, minWidth: 160 }}
             onClick={downloadPoster}
             disabled={!posterUrl}
           >
-            ⬇ Download PNG (Manual Copy)
+            ⬇ Download PNG
           </button>
           <button
             id="retake-poster-btn"
             className="btn btn-danger"
-            style={{ flex: 1, minWidth: 120 }}
+            style={{ flex: 1, minWidth: 110 }}
             onClick={onReset}
           >
             ↺ Start Over
@@ -465,35 +609,110 @@ export default function PosterStep({
           padding: 24,
           boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
         }}>
+          {/* Header & Status Badge */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
             <h3 style={{ fontFamily: 'var(--font-display)', fontSize: '1.05rem', color: 'var(--cyan)', margin: 0 }}>
-              📱 Scan QR to Download on Your Phone
+              📱 Scan QR to Download to Phone
             </h3>
-            {serverInfo?.ip && (
+
+            {isPublic ? (
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '4px 12px',
+                borderRadius: 999,
+                background: 'rgba(16, 185, 129, 0.12)',
+                border: '1px solid rgba(16, 185, 129, 0.35)',
+                fontSize: '0.78rem',
+                color: '#34d399',
+                fontFamily: 'var(--font-accent)',
+                fontWeight: 700,
+              }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#34d399', boxShadow: '0 0 10px #34d399' }} />
+                <span>🌐 4G/5G Ready · No Same Wi-Fi Needed</span>
+              </div>
+            ) : serverInfo?.ip ? (
               <div style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 6,
                 padding: '4px 10px',
                 borderRadius: 999,
-                background: 'rgba(0, 245, 255, 0.08)',
-                border: '1px solid rgba(0, 245, 255, 0.25)',
+                background: 'rgba(245, 158, 11, 0.12)',
+                border: '1px solid rgba(245, 158, 11, 0.35)',
                 fontSize: '0.75rem',
-                color: 'var(--cyan)',
+                color: '#fbbf24',
                 fontFamily: 'var(--font-accent)',
               }}>
                 <span className="pulse-dot" style={{ width: 6, height: 6 }} />
-                <span>Wi-Fi: {serverInfo.ip}</span>
+                <span>Local Wi-Fi: {serverInfo.ip}</span>
               </div>
-            )}
+            ) : null}
+          </div>
+
+          {/* Mode Switcher Tabs */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 16,
+            background: 'rgba(255,255,255,0.04)',
+            padding: 4,
+            borderRadius: 10,
+            border: '1px solid rgba(255,255,255,0.08)',
+            maxWidth: 440,
+          }}>
+            <button
+              type="button"
+              onClick={() => handleToggleDownloadMode('direct')}
+              style={{
+                flex: 1,
+                padding: '7px 12px',
+                borderRadius: 8,
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '0.78rem',
+                fontWeight: 700,
+                fontFamily: 'var(--font-accent)',
+                letterSpacing: '0.03em',
+                transition: 'all 0.2s ease',
+                background: downloadMode === 'direct' ? 'linear-gradient(135deg, #00f5ff 0%, #0077ff 100%)' : 'transparent',
+                color: downloadMode === 'direct' ? '#030814' : 'var(--text-muted)',
+                boxShadow: downloadMode === 'direct' ? '0 0 14px rgba(0,245,255,0.4)' : 'none',
+              }}
+            >
+              ⚡ Direct Download (Instant Save)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleToggleDownloadMode('viewer')}
+              style={{
+                flex: 1,
+                padding: '7px 12px',
+                borderRadius: 8,
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '0.78rem',
+                fontWeight: 700,
+                fontFamily: 'var(--font-accent)',
+                letterSpacing: '0.03em',
+                transition: 'all 0.2s ease',
+                background: downloadMode === 'viewer' ? 'linear-gradient(135deg, #00f5ff 0%, #0077ff 100%)' : 'transparent',
+                color: downloadMode === 'viewer' ? '#030814' : 'var(--text-muted)',
+                boxShadow: downloadMode === 'viewer' ? '0 0 14px rgba(0,245,255,0.4)' : 'none',
+              }}
+            >
+              📱 Mobile Webpage (View &amp; Share)
+            </button>
           </div>
 
           {uploading && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: 'var(--cyan)', fontFamily: 'var(--font-accent)', padding: '24px 0' }}>
               <span className="animate-pulse-glow" style={{ fontSize: '1.5rem' }}>⏳</span>
               <div>
-                <p style={{ margin: 0, fontWeight: 600 }}>Preparing QR code &amp; mobile download page…</p>
-                <p style={{ margin: '2px 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Setting up instant mobile save &amp; share</p>
+                <p style={{ margin: 0, fontWeight: 600 }}>Preparing direct download QR code…</p>
+                <p style={{ margin: '2px 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Setting up public download link</p>
               </div>
             </div>
           )}
@@ -504,52 +723,42 @@ export default function PosterStep({
 
               <div style={{ flex: 1, minWidth: 240 }}>
                 <div style={{
-                  background: 'rgba(0, 245, 255, 0.05)',
-                  border: '1px solid rgba(0, 245, 255, 0.15)',
+                  background: isPublic ? 'rgba(16, 185, 129, 0.08)' : 'rgba(0, 245, 255, 0.05)',
+                  border: isPublic ? '1px solid rgba(16, 185, 129, 0.25)' : '1px solid rgba(0, 245, 255, 0.15)',
                   borderRadius: 'var(--radius-sm)',
                   padding: '12px 14px',
                   marginBottom: 14,
                 }}>
-                  <p style={{ color: 'var(--cyan)', fontFamily: 'var(--font-accent)', fontWeight: 700, fontSize: '0.9rem', marginBottom: 4 }}>
-                    ✓ Ready to Scan &amp; Save
+                  <p style={{ color: isPublic ? '#34d399' : 'var(--cyan)', fontFamily: 'var(--font-accent)', fontWeight: 700, fontSize: '0.9rem', marginBottom: 4 }}>
+                    {downloadMode === 'direct' ? '⚡ 1-Scan Direct Download' : '📱 1-Scan Mobile Viewer'}
                   </p>
                   <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', lineHeight: 1.5, margin: 0 }}>
-                    Point your phone camera (iPhone or Android) to open the mobile poster viewer with <strong>1-tap Save to Photos</strong> &amp; AirDrop/Sharing!
+                    {isPublic
+                      ? 'Point any phone camera (iPhone or Android) on cellular 4G/5G data or any Wi-Fi to directly download the high-resolution poster!'
+                      : 'Point your phone camera to download your poster. Make sure your phone is connected to the same Wi-Fi network.'}
                   </p>
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14, fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ color: 'var(--cyan)' }}>⚡</span>
-                    <span>Instant full-res poster display on phone</span>
+                    <span style={{ color: isPublic ? '#34d399' : 'var(--cyan)' }}>⚡</span>
+                    <span>
+                      {downloadMode === 'direct'
+                        ? 'Directly saves full-res MAIH-Poster.png into device Downloads/Photos'
+                        : 'Opens mobile preview page with 1-tap "Save to Photos" button'}
+                    </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ color: 'var(--cyan)' }}>📸</span>
-                    <span>Save directly to Apple Photos or Android Gallery</span>
+                    <span style={{ color: isPublic ? '#34d399' : 'var(--cyan)' }}>🌐</span>
+                    <span>
+                      {isPublic
+                        ? 'No Wi-Fi setup needed — works on cellular data (4G/5G) or any network'
+                        : `Same Wi-Fi network required (${serverInfo?.ip || 'local IP'})`}
+                    </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ color: 'var(--cyan)' }}>📶</span>
-                    <span>Same Wi-Fi network: phone must connect to this venue Wi-Fi</span>
-                  </div>
-                </div>
-
-                {/* Helpful Troubleshooting Card */}
-                <div style={{
-                  background: 'rgba(255, 180, 0, 0.08)',
-                  border: '1px solid rgba(255, 180, 0, 0.25)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '10px 14px',
-                  marginBottom: 14,
-                  fontSize: '0.78rem',
-                  color: '#fef08a',
-                  lineHeight: 1.5,
-                }}>
-                  <strong style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, color: '#facc15' }}>
-                    <span>💡</span> Phone says "Site can't be reached"?
-                  </strong>
-                  <div style={{ color: '#fde047' }}>
-                    1. <strong>Phone Wi-Fi:</strong> Check that your phone's Wi-Fi is ON and connected to the same network (not mobile 4G/5G data).<br />
-                    2. <strong>Windows Setting:</strong> In Windows <em>Settings &gt; Network &amp; Internet &gt; Wi-Fi &gt; Manage Known Networks</em>, ensure network profile is set to <strong>Private</strong> (Windows blocks incoming phone connections when set to Public).
+                    <span style={{ color: isPublic ? '#34d399' : 'var(--cyan)' }}>📱</span>
+                    <span>Compatible with iPhone Camera &amp; Android QR Scanner</span>
                   </div>
                 </div>
 
@@ -558,7 +767,7 @@ export default function PosterStep({
                   <button
                     className="btn btn-primary btn-sm"
                     onClick={() => window.open(shareUrl, '_blank')}
-                    title="Test the mobile download page in a new browser tab"
+                    title="Test the download link in a new browser tab"
                   >
                     🔗 Test Link
                   </button>
@@ -573,90 +782,210 @@ export default function PosterStep({
                     onClick={() => setShowNetworkSettings(prev => !prev)}
                     style={{ fontSize: '0.76rem' }}
                   >
-                    ⚙ {showNetworkSettings ? 'Hide Network' : 'Network Settings'}
+                    ⚙ {showNetworkSettings ? 'Hide Settings' : 'Cloud & Network Settings'}
                   </button>
                 </div>
 
-                {/* Collapsible Network Settings */}
+                {/* Collapsible Network & Cloud Settings */}
                 {showNetworkSettings && (
                   <div style={{
-                    background: 'rgba(5, 8, 16, 0.85)',
+                    background: 'rgba(5, 8, 16, 0.92)',
                     border: '1px solid rgba(0, 245, 255, 0.25)',
                     borderRadius: 'var(--radius-sm)',
                     padding: 14,
                     marginTop: 10,
                   }}>
-                    <p style={{ margin: '0 0 8px', fontSize: '0.8rem', color: 'var(--cyan)', fontWeight: 600 }}>
-                      Network Configuration
-                    </p>
-                    <p style={{ margin: '0 0 10px', fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                      If your phone is on a different network or using a hotspot / tunnel, choose or enter your IP below:
+                    <p style={{ margin: '0 0 6px', fontSize: '0.82rem', color: 'var(--cyan)', fontWeight: 700 }}>
+                      🌐 Public Cloud &amp; Network Configuration
                     </p>
 
-                    {serverInfo?.interfaces && serverInfo.interfaces.length > 0 && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
-                        {serverInfo.interfaces.map(iface => (
+                    {/* Active Provider & Tunnel Status */}
+                    <div style={{
+                      background: 'rgba(255,255,255,0.03)',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                      borderRadius: 6,
+                      padding: '8px 10px',
+                      marginBottom: 12,
+                      fontSize: '0.75rem',
+                      lineHeight: 1.5,
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Status:</span>
+                        <strong style={{ color: isPublic ? '#34d399' : '#fbbf24' }}>
+                          {isPublic ? `🟢 Public Internet Active (${provider.toUpperCase()})` : '📶 Local Wi-Fi Mode'}
+                        </strong>
+                      </div>
+                      {serverInfo?.tunnelUrl && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, wordBreak: 'break-all' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>Tunnel:</span>
+                          <span style={{ color: 'var(--cyan)', fontFamily: 'monospace' }}>{serverInfo.tunnelUrl}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Source Toggle if both public and local are available */}
+                    {serverInfo?.tunnelUrl && localDownloadUrl && (
+                      <div style={{ marginBottom: 12 }}>
+                        <label style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 6 }}>
+                          Network Route:
+                        </label>
+                        <div style={{ display: 'flex', gap: 6 }}>
                           <button
-                            key={iface.address}
                             type="button"
-                            className="btn btn-secondary btn-sm"
+                            className="btn btn-sm"
                             style={{
-                              justifyContent: 'space-between',
-                              fontSize: '0.75rem',
-                              padding: '6px 10px',
-                              borderColor: serverInfo.ip === iface.address ? 'var(--cyan)' : 'rgba(255,255,255,0.1)',
-                              background: serverInfo.ip === iface.address ? 'rgba(0, 245, 255, 0.12)' : 'rgba(255,255,255,0.03)',
+                              flex: 1,
+                              fontSize: '0.72rem',
+                              padding: '5px 8px',
+                              background: isPublic ? 'rgba(0,245,255,0.2)' : 'rgba(255,255,255,0.05)',
+                              borderColor: isPublic ? 'var(--cyan)' : 'rgba(255,255,255,0.1)',
+                              color: isPublic ? '#fff' : 'var(--text-muted)',
                             }}
-                            onClick={() => handleApplyIp(iface.address)}
+                            onClick={handleSwitchToPublicInternet}
                           >
-                            <span><strong>{iface.name}</strong> ({iface.type})</span>
-                            <span style={{ fontFamily: 'monospace', color: serverInfo.ip === iface.address ? 'var(--cyan)' : 'var(--text-muted)' }}>
-                              {iface.address} {iface.recommended ? '★' : ''}
-                            </span>
+                            🌐 Public Tunnel
                           </button>
-                        ))}
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            style={{
+                              flex: 1,
+                              fontSize: '0.72rem',
+                              padding: '5px 8px',
+                              background: !isPublic ? 'rgba(0,245,255,0.2)' : 'rgba(255,255,255,0.05)',
+                              borderColor: !isPublic ? 'var(--cyan)' : 'rgba(255,255,255,0.1)',
+                              color: !isPublic ? '#fff' : 'var(--text-muted)',
+                            }}
+                            onClick={handleSwitchToLocalWifi}
+                          >
+                            📶 Local Wi-Fi
+                          </button>
+                        </div>
                       </div>
                     )}
 
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <input
-                        type="text"
-                        placeholder="Custom IP or Domain (e.g. 192.168.1.100)"
-                        value={ipInput}
-                        onChange={e => setIpInput(e.target.value)}
-                        style={{
-                          flex: 1,
-                          background: 'rgba(0,0,0,0.5)',
-                          border: '1px solid rgba(0,245,255,0.2)',
-                          borderRadius: 6,
-                          padding: '6px 10px',
-                          color: '#fff',
-                          fontSize: '0.75rem',
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-sm"
-                        style={{ fontSize: '0.75rem', padding: '6px 12px' }}
-                        onClick={() => {
-                          if (ipInput.trim()) handleApplyIp(ipInput.trim());
-                        }}
-                      >
-                        Apply
-                      </button>
-                      {customIp && (
+                    {/* ImgBB Free Cloud Option */}
+                    <div style={{
+                      background: 'rgba(0, 245, 255, 0.04)',
+                      border: '1px solid rgba(0, 245, 255, 0.15)',
+                      borderRadius: 6,
+                      padding: 10,
+                      marginBottom: 12,
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <strong style={{ fontSize: '0.76rem', color: 'var(--cyan)' }}>
+                          ☁ ImgBB Cloud Uploader (Optional)
+                        </strong>
+                        <a
+                          href="https://api.imgbb.com/"
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ fontSize: '0.7rem', color: 'var(--cyan)', textDecoration: 'underline' }}
+                        >
+                          Get Free Key ↗
+                        </a>
+                      </div>
+                      <p style={{ margin: '0 0 8px', fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                        Host posters on ImgBB CDN with permanent global direct download links.
+                      </p>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <input
+                          type="text"
+                          placeholder="ImgBB API Key (e.g. 7a8b9c...)"
+                          value={imgbbInput}
+                          onChange={e => setImgbbInput(e.target.value)}
+                          style={{
+                            flex: 1,
+                            background: 'rgba(0,0,0,0.6)',
+                            border: '1px solid rgba(0,245,255,0.2)',
+                            borderRadius: 6,
+                            padding: '6px 8px',
+                            color: '#fff',
+                            fontSize: '0.74rem',
+                            fontFamily: 'monospace',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          style={{ fontSize: '0.72rem', padding: '6px 10px' }}
+                          onClick={() => handleSaveImgbbKey(imgbbInput)}
+                        >
+                          Save
+                        </button>
+                        {imgbbKey && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{ fontSize: '0.72rem', padding: '6px 8px' }}
+                            onClick={() => {
+                              setImgbbInput('');
+                              handleSaveImgbbKey('');
+                            }}
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Local LAN IP Fallback */}
+                    <div style={{ marginTop: 8 }}>
+                      <p style={{ margin: '0 0 6px', fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                        LAN Network IP (For offline local Wi-Fi mode):
+                      </p>
+                      {serverInfo?.interfaces && serverInfo.interfaces.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+                          {serverInfo.interfaces.map(iface => (
+                            <button
+                              key={iface.address}
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              style={{
+                                justifyContent: 'space-between',
+                                fontSize: '0.72rem',
+                                padding: '5px 8px',
+                                borderColor: serverInfo.ip === iface.address ? 'var(--cyan)' : 'rgba(255,255,255,0.08)',
+                                background: serverInfo.ip === iface.address ? 'rgba(0, 245, 255, 0.1)' : 'rgba(255,255,255,0.02)',
+                              }}
+                              onClick={() => handleApplyIp(iface.address)}
+                            >
+                              <span>{iface.name} ({iface.type})</span>
+                              <span style={{ fontFamily: 'monospace', color: serverInfo.ip === iface.address ? 'var(--cyan)' : 'var(--text-muted)' }}>
+                                {iface.address}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <input
+                          type="text"
+                          placeholder="Custom IP or Domain"
+                          value={ipInput}
+                          onChange={e => setIpInput(e.target.value)}
+                          style={{
+                            flex: 1,
+                            background: 'rgba(0,0,0,0.6)',
+                            border: '1px solid rgba(0,245,255,0.2)',
+                            borderRadius: 6,
+                            padding: '6px 8px',
+                            color: '#fff',
+                            fontSize: '0.72rem',
+                          }}
+                        />
                         <button
                           type="button"
                           className="btn btn-secondary btn-sm"
-                          style={{ fontSize: '0.75rem', padding: '6px 10px' }}
+                          style={{ fontSize: '0.72rem', padding: '6px 10px' }}
                           onClick={() => {
-                            setIpInput('');
-                            handleApplyIp('');
+                            if (ipInput.trim()) handleApplyIp(ipInput.trim());
                           }}
                         >
-                          Reset
+                          Apply
                         </button>
-                      )}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -675,7 +1004,7 @@ export default function PosterStep({
               lineHeight: 1.6,
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                <strong>⚠ QR Code Sharing Offline</strong>
+                <strong>⚠ QR Code Offline</strong>
                 {posterUrl && (
                   <button
                     type="button"
@@ -689,7 +1018,7 @@ export default function PosterStep({
               </div>
               <p style={{ margin: '0 0 8px' }}>{uploadErr}</p>
               <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Tip: Use the <strong>Download PNG</strong> button above to save the poster directly to this computer.
+                Tip: You can still click <strong>Download PNG</strong> above to save the poster directly on this computer.
               </p>
             </div>
           )}

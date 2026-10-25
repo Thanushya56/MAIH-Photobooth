@@ -112,6 +112,11 @@ export async function generatePoster(canvas, opts = {}) {
       const sy = FRAME_BBOX.minY + Math.max(0, Math.min(fh - sh, (fh - sh) * 0.2));
 
       ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      // Subtle studio enhancement: crisp contrast and vivid saturation
+      ctx.filter = 'contrast(1.04) saturate(1.06) brightness(1.02)';
+
       // Apply exact hexagonal / angular clipping path
       ctx.beginPath();
       FRAME_POLYGON.forEach(([px, py], i) => {
@@ -121,7 +126,7 @@ export async function generatePoster(canvas, opts = {}) {
       ctx.closePath();
       ctx.clip();
 
-      // Draw photo
+      // Draw photo with high quality interpolation
       ctx.drawImage(photoImg, sx, sy, sw, sh);
       ctx.restore();
     } catch (err) {
@@ -135,12 +140,20 @@ export async function generatePoster(canvas, opts = {}) {
   try {
     const tmplUrl = templateDataUrl || '/poster-template-cutout.png';
     const tmplImg = await loadImg(tmplUrl);
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(tmplImg, 0, 0, POSTER_W, POSTER_H);
+    ctx.restore();
   } catch (err) {
     console.warn('Failed to load template image, attempting fallback:', err);
     try {
       const fallbackImg = await loadImg('/poster-template.jpg');
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       ctx.drawImage(fallbackImg, 0, 0, POSTER_W, POSTER_H);
+      ctx.restore();
     } catch (e2) {
       console.error('All template loading failed:', e2);
     }

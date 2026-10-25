@@ -12,7 +12,7 @@ import { useCamera } from '../hooks/useCamera.js';
 const COUNTDOWN_SECS = 3;
 
 export default function CameraStep({ onPhotoReady, onBack }) {
-  const { videoRef, status, error, startCamera, stopCamera, captureFrame } = useCamera();
+  const { videoRef, status, error, facingMode, switchCamera, startCamera, stopCamera, captureFrame } = useCamera();
   const [captured,   setCaptured]   = useState(null);
   const [countdown,  setCountdown]  = useState(null);
   const [groupSize,  setGroupSize]  = useState(1);
@@ -92,12 +92,12 @@ export default function CameraStep({ onPhotoReady, onBack }) {
     <div className="glass-card step-card">
       <h2 className="section-title">Capture Your Photo</h2>
       <p className="section-subtitle">
-        Your image is processed entirely on your device — never sent to any AI service.
+        Works seamlessly on laptops, webcams, iPhones, and Android phones.
       </p>
 
       {/* Mode toggle */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
-        {[['camera', '📷 Webcam'], ['upload', '📂 Upload Photo']].map(([m, label]) => (
+        {[['camera', '📷 Camera'], ['upload', '📂 Upload Photo']].map(([m, label]) => (
           <button
             key={m}
             id={`mode-${m}-btn`}
@@ -142,12 +142,13 @@ export default function CameraStep({ onPhotoReady, onBack }) {
       {mode === 'camera' && (
         <div>
           {/* The <video> is ALWAYS in the DOM when camera mode is active.
-              Only visibility/display is toggled.  This is the core camera fix. */}
+              Only visibility/display is toggled. This is the core camera fix. */}
           <div
             className="camera-container"
             style={{
               marginBottom: 16,
               display: status === 'active' && !captured ? 'block' : 'none',
+              position: 'relative',
             }}
           >
             <video
@@ -156,7 +157,10 @@ export default function CameraStep({ onPhotoReady, onBack }) {
               playsInline
               muted
               className="camera-video"
-              style={{ maxHeight: 420, transform: 'scaleX(-1)' /* mirror preview */ }}
+              style={{
+                maxHeight: 440,
+                transform: facingMode === 'user' ? 'scaleX(-1)' : 'none',
+              }}
             />
             <div className="camera-overlay">
               <div className="camera-corner tl" />
@@ -165,6 +169,18 @@ export default function CameraStep({ onPhotoReady, onBack }) {
               <div className="camera-corner br" />
               <div className="scan-line" />
             </div>
+
+            {/* Quick Camera Flip Badge (overlay on viewfinder for phone & mobile ease) */}
+            <button
+              type="button"
+              className="camera-flip-overlay-btn"
+              onClick={switchCamera}
+              title={`Switch camera (currently ${facingMode === 'user' ? 'front/selfie' : 'rear/back'})`}
+              aria-label="Switch camera"
+            >
+              🔄 {facingMode === 'user' ? 'Rear Cam' : 'Front Cam'}
+            </button>
+
             {/* Countdown overlay */}
             {countdown !== null && (
               <div style={{
@@ -222,24 +238,41 @@ export default function CameraStep({ onPhotoReady, onBack }) {
 
           {/* Capture buttons */}
           {status === 'active' && !captured && (
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 6 }}>
               <button
                 id="capture-btn"
                 className="btn btn-primary btn-lg"
-                style={{ flex: 2 }}
+                style={{ flex: 3, minWidth: 160 }}
                 onClick={startCountdown}
                 disabled={countdown !== null}
               >
-                {countdown !== null ? `📸 Capturing in ${countdown}…` : '📸 Capture (3s countdown)'}
+                {countdown !== null ? `📸 Capturing in ${countdown}…` : '📸 Take Photo (3s)'}
               </button>
               <button
                 id="capture-now-btn"
                 className="btn btn-secondary"
+                style={{ flex: 1, minWidth: 80 }}
                 onClick={doCapture}
                 disabled={countdown !== null}
                 title="Capture immediately"
               >
                 ⚡ Now
+              </button>
+              <button
+                id="switch-camera-btn"
+                className="btn"
+                style={{
+                  flex: 1.2,
+                  minWidth: 110,
+                  background: 'rgba(0, 245, 255, 0.08)',
+                  color: 'var(--cyan)',
+                  border: '1px solid rgba(0, 245, 255, 0.35)',
+                }}
+                onClick={switchCamera}
+                disabled={countdown !== null}
+                title="Switch between front/selfie and back/rear camera"
+              >
+                🔄 {facingMode === 'user' ? 'Rear' : 'Front'}
               </button>
             </div>
           )}

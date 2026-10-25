@@ -1,15 +1,24 @@
 /**
  * netlify/functions/poster.js
  *
- * Serverless handler for Netlify deployments:
- * - POST /api/poster      → stores generated poster and returns shareable URL
- * - GET  /api/poster/:id  → serves mobile poster viewer or binary PNG download
+ * Serverless handler for Netlify deployments with persistent Netlify Blobs storage:
+ * - POST /api/poster      → stores generated poster and returns shareable direct download URL
+ * - GET  /api/poster/:id  → directly serves binary PNG download or interactive mobile viewer
  * - GET  /api/poster/network → returns cloud host information
  */
 import crypto from 'crypto';
+import { getStore } from '@netlify/blobs';
 
-// In-memory store for serverless instance lifetime
+// In-memory fallback
 const posterStore = new Map();
+
+function getBlobsStore() {
+  try {
+    return getStore('maih-posters');
+  } catch {
+    return null;
+  }
+}
 
 function renderMobilePosterPage(id) {
   return `<!DOCTYPE html>
@@ -76,7 +85,7 @@ function renderMobilePosterPage(id) {
     .poster-img {
       width: 100%;
       height: auto;
-      max-height: 54vh;
+      max-height: 52vh;
       object-fit: contain;
       border-radius: 12px;
       display: block;
@@ -157,6 +166,18 @@ function renderMobilePosterPage(id) {
     const posterUrl = "/api/poster/" + id + "?raw=1";
     const downloadUrl = "/api/poster/" + id + "?download=1";
 
+    // Auto-trigger download
+    window.addEventListener('DOMContentLoaded', () => {
+      setTimeout(() => {
+        const link = document.createElement('a');
+        link.href = downloadUrl;
+        link.download = 'MAIH-Poster.png';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }, 500);
+    });
+
     async function handleShareOrSave() {
       try {
         const res = await fetch(posterUrl);
@@ -230,7 +251,10 @@ export async function handler(event) {
       body: JSON.stringify({
         selectedIp: host,
         port: 443,
-        interfaces: [{ name: 'Netlify Cloud', address: host, type: 'cloud', priority: 100, recommended: true }]
+        interfaces: [{ name: 'Netlify Cloud', address: host, type: 'cloud', priority: 100, recommended: true }],
+        tunnelUrl: `https://${host}`,
+        tunnelActive: true,
+        isPublic: true,
       }),
     };
   }
@@ -244,20 +268,90 @@ export async function handler(event) {
       }
       const id = crypto.randomUUID();
       const base64Data = image.split(',')[1];
+
+      // Save to Netlify Blobs for cross-instance persistence
+      const store = getBlobsStore();
+      if (store) {
+        try {
+          await store.set(id, base64Data, { metadata: { createdAt: Date.now() } });
+        } catch (err) {
+          console.warn('Netlify Blobs set error:', err.message);
+        }
+      }
       posterStore.set(id, base64Data);
 
       const host = event.headers.host || 'localhost';
       const proto = event.headers['x-forwarded-proto'] || 'https';
-      const url = `${proto}://${host}/api/poster/${id}`;
+      const directDownloadUrl = `${proto}://${host}/api/poster/${id}?download=1`;
+      const viewerUrl = `${proto}://${host}/api/poster/${id}`;
 
       return {
         statusCode: 200,
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, id, ip: host, port: 443, interfaces: [] }),
+        body: JSON.stringify({
+          url: directDownloadUrl,
+          directDownloadUrl,
+          viewerUrl,
+          id,
+          ip: host,
+          port: 443,
+          isPublic: true,
+          interfaces: [],
+        }),
       };
     } catch (e) {
       return { statusCode: 500, headers, body: JSON.stringify({ error: e.message }) };
     }
+  }
+
+  // GET /api/poster/gallery or /api/poster/list (ADMIN ONLY)
+  if (httpMethod === 'GET' && (path.endsWith('/gallery') || path.endsWith('/list'))) {
+    const adminPin = process.env.ADMIN_PIN || 'maih2026';
+    const reqPin = event.headers['x-admin-pin'] || (event.queryStringParameters && event.queryStringParameters.pin);
+    if (!reqPin || reqPin !== adminPin) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({ error: 'Access denied: Admin authentication required', requiresAuth: true }),
+      };
+    }
+
+    const posters = [];
+    const store = getBlobsStore();
+    if (store) {
+      try {
+        const { blobs } = await store.list();
+        for (const blob of blobs) {
+          posters.push({
+            id: blob.key,
+            filename: `MAIH_Poster_${blob.key}.png`,
+            createdAt: blob.uploadedAt || new Date().toISOString(),
+            timestamp: blob.uploadedAt ? new Date(blob.uploadedAt).getTime() : Date.now(),
+            url: `/api/poster/${blob.key}`,
+            downloadUrl: `/api/poster/${blob.key}?download=1`,
+          });
+        }
+      } catch (e) {
+        console.warn('Blobs list error:', e.message);
+      }
+    } else {
+      for (const [id] of posterStore.entries()) {
+        posters.push({
+          id,
+          filename: `MAIH_Poster_${id}.png`,
+          createdAt: new Date().toISOString(),
+          timestamp: Date.now(),
+          url: `/api/poster/${id}`,
+          downloadUrl: `/api/poster/${id}?download=1`,
+        });
+      }
+    }
+    posters.sort((a, b) => b.timestamp - a.timestamp);
+    return {
+      statusCode: 200,
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ count: posters.length, posters }),
+    };
   }
 
   // GET /api/poster/:id
@@ -265,7 +359,18 @@ export async function handler(event) {
     const match = path.match(/\/([0-9a-f-]{36})(\.png)?$/i);
     if (match) {
       const id = match[1];
-      const base64Data = posterStore.get(id);
+      let base64Data = posterStore.get(id);
+
+      if (!base64Data) {
+        const store = getBlobsStore();
+        if (store) {
+          try {
+            base64Data = await store.get(id);
+          } catch (err) {
+            console.warn('Netlify Blobs get error:', err.message);
+          }
+        }
+      }
 
       if (!base64Data) {
         const accept = event.headers['accept'] || '';
@@ -284,7 +389,7 @@ export async function handler(event) {
       }
 
       const queryParams = event.queryStringParameters || {};
-      const isDownload = queryParams.download === '1';
+      const isDownload = queryParams.download === '1' || queryParams.download !== undefined;
       const isRaw = queryParams.raw === '1' || path.endsWith('.png');
       const accept = event.headers['accept'] || '';
       const wantsHtml = accept.includes('text/html') && !isDownload && !isRaw;
@@ -303,7 +408,7 @@ export async function handler(event) {
           ...headers,
           'Content-Type': 'image/png',
           'Content-Disposition': isDownload ? 'attachment; filename="MAIH-Poster.png"' : 'inline; filename="MAIH-Poster.png"',
-          'Cache-Control': 'no-store',
+          'Cache-Control': 'public, max-age=86400',
         },
         body: base64Data,
         isBase64Encoded: true,
