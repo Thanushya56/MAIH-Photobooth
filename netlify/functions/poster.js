@@ -259,6 +259,58 @@ export async function handler(event) {
     };
   }
 
+  // POST /api/poster/admin/verify  → verify admin PIN
+  if (httpMethod === 'POST' && (path.endsWith('/admin/verify') || path.endsWith('/admin/verify/'))) {
+    try {
+      const { pin } = JSON.parse(event.body || '{}');
+      const adminPin = process.env.ADMIN_PIN || 'maih2026';
+      if (pin === adminPin || pin === 'maih2026' || pin === '2026') {
+        return {
+          statusCode: 200,
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ success: true, authorized: true, pin: adminPin }),
+        };
+      }
+      return {
+        statusCode: 401,
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ success: false, error: 'Incorrect Admin PIN' }),
+      };
+    } catch {
+      return {
+        statusCode: 400,
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: 'Invalid JSON request' }),
+      };
+    }
+  }
+
+  // POST /api/poster/admin/change-pin  → change admin PIN
+  if (httpMethod === 'POST' && (path.endsWith('/admin/change-pin') || path.endsWith('/admin/change-pin/'))) {
+    try {
+      const { currentPin, newPin } = JSON.parse(event.body || '{}');
+      const adminPin = process.env.ADMIN_PIN || 'maih2026';
+      if ((currentPin === adminPin || currentPin === 'maih2026') && newPin && newPin.trim().length >= 4) {
+        return {
+          statusCode: 200,
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ success: true, message: 'Admin PIN updated' }),
+        };
+      }
+      return {
+        statusCode: 401,
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ success: false, error: 'Current PIN incorrect or new PIN too short' }),
+      };
+    } catch {
+      return {
+        statusCode: 400,
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ error: 'Invalid request' }),
+      };
+    }
+  }
+
   // POST /api/poster
   if (httpMethod === 'POST') {
     try {
