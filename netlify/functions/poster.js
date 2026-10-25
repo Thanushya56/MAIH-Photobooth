@@ -402,12 +402,16 @@ export async function handler(event) {
         };
       }
 
+      const isJpeg = base64Data && (base64Data.startsWith('/9j/') || base64Data.slice(0, 30).includes('/9j/'));
+      const contentType = isJpeg ? 'image/jpeg' : 'image/png';
+      const fileExt = isJpeg ? 'jpg' : 'png';
+
       return {
         statusCode: 200,
         headers: {
           ...headers,
-          'Content-Type': 'image/png',
-          'Content-Disposition': isDownload ? 'attachment; filename="MAIH-Poster.png"' : 'inline; filename="MAIH-Poster.png"',
+          'Content-Type': contentType,
+          'Content-Disposition': isDownload ? `attachment; filename="MAIH-Poster.${fileExt}"` : `inline; filename="MAIH-Poster.${fileExt}"`,
           'Cache-Control': 'public, max-age=86400',
         },
         body: base64Data,

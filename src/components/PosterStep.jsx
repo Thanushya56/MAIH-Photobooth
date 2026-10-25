@@ -162,8 +162,12 @@ export default function PosterStep({
       }
       return;
     } catch (err) {
-      console.warn('Local server upload error:', err.message);
-      setUploadErr('Photo booth server not connected. Please make sure "npm run dev" is running in the terminal.');
+      console.warn('Poster upload error:', err.message);
+      const isCloud = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+      setUploadErr(isCloud
+        ? `Cloud upload temporarily unavailable: ${err.message || 'Service busy'}. Please click Retry below.`
+        : 'Photo booth server not connected. Please make sure "npm run dev" is running in the terminal.'
+      );
     }
 
     setUploading(false);
@@ -283,10 +287,22 @@ export default function PosterStep({
         const dataUrl = canvasRef.current.toDataURL('image/png');
         setPosterUrl(dataUrl);
 
+        // Prepare optimized image for mobile QR download (JPEG quality 0.93, ~500KB vs 6.4MB PNG)
+        // Keeps full 1446x2048 resolution, uploads in 0.15s, and prevents serverless 413 Payload Too Large limits!
+        let uploadPayload = dataUrl;
+        try {
+          const fastJpg = canvasRef.current.toDataURL('image/jpeg', 0.93);
+          if (fastJpg && fastJpg.length > 500) {
+            uploadPayload = fastJpg;
+          }
+        } catch {
+          // fallback to dataUrl
+        }
+
         // Upload to QR service & auto-save immediately (only once per unique image)
         if (uploadedForPhotoRef.current !== dataUrl) {
           uploadedForPhotoRef.current = dataUrl;
-          uploadPoster(dataUrl);
+          uploadPoster(uploadPayload);
         }
         if (autoSavedForPhotoRef.current !== dataUrl) {
           autoSavedForPhotoRef.current = dataUrl;

@@ -138,19 +138,59 @@ export async function uploadToCustomEndpoint(dataUrl, endpointUrl) {
 }
 
 /**
- * Upload to local photobooth server (/api/poster)
- * Handles both public Cloudflare tunnel URLs and local LAN WiFi fallback
+ * Ensures poster image dataUrl is optimized for cloud transfer (< 1.5MB)
+ * while preserving high-resolution quality (1446×2048).
+ * Avoids serverless/cloud 413 Payload Too Large errors (Netlify 6MB hard limit).
+ */
+export async function getOptimizedUploadDataUrl(dataUrl) {
+  if (!dataUrl) return dataUrl;
+  // If already under 1.8MB base64 string length (~1.3MB binary), no compression needed
+  if (dataUrl.length < 1800000) return dataUrl;
+
+  try {
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('Image decode error'));
+      img.src = dataUrl;
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth || img.width;
+    canvas.height = img.naturalHeight || img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0);
+
+    // Export as high-quality JPEG (quality 0.93)
+    const optJpg = canvas.toDataURL('image/jpeg', 0.93);
+    if (optJpg && optJpg.length > 1000 && optJpg.length < dataUrl.length) {
+      return optJpg;
+    }
+  } catch (err) {
+    console.warn('Upload optimization fallback:', err.message);
+  }
+  return dataUrl;
+}
+
+/**
+ * Upload to local photobooth server or Netlify backend (/api/poster)
+ * Handles both public Cloudflare tunnel URLs, Netlify cloud, and local LAN WiFi fallback
  */
 export async function uploadToLocalServer(dataUrl, customIp) {
+  const payloadUrl = await getOptimizedUploadDataUrl(dataUrl);
+
   const resp = await fetch(LOCAL_API, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image: dataUrl, customIp: customIp || undefined }),
+    body: JSON.stringify({ image: payloadUrl, customIp: customIp || undefined }),
   });
 
   const contentType = resp.headers.get('content-type') || '';
   if (!resp.ok || !contentType.includes('application/json')) {
-    throw new Error('Local photo booth server unavailable');
+    const errorText = await resp.text().catch(() => '');
+    throw new Error(`Upload server error (${resp.status}): ${errorText.slice(0, 100) || 'Server unavailable'}`);
   }
 
   const data = await resp.json();

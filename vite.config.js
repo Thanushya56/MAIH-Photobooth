@@ -807,12 +807,16 @@ function createPosterMiddleware(server) {
           return res.end(renderMobilePosterPage(id))
         }
 
-        // Binary PNG response – direct download
-        res.setHeader('Content-Type', 'image/png')
+        // Binary response – direct download
+        const isJpeg = data && data.length > 2 && data[0] === 0xff && data[1] === 0xd8
+        const contentType = isJpeg ? 'image/jpeg' : 'image/png'
+        const fileExt = isJpeg ? 'jpg' : 'png'
+
+        res.setHeader('Content-Type', contentType)
         if (isDownload) {
-          res.setHeader('Content-Disposition', 'attachment; filename="MAIH-Poster.png"')
+          res.setHeader('Content-Disposition', `attachment; filename="MAIH-Poster.${fileExt}"`)
         } else {
-          res.setHeader('Content-Disposition', 'inline; filename="MAIH-Poster.png"')
+          res.setHeader('Content-Disposition', `inline; filename="MAIH-Poster.${fileExt}"`)
         }
         res.setHeader('Cache-Control', 'public, max-age=86400')
         res.setHeader('Access-Control-Allow-Origin', '*')
