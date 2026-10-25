@@ -229,7 +229,15 @@ function renderNotFoundPage() {
 }
 
 export async function handler(event) {
-  const path = event.path || '';
+  let path = event.path || '';
+  if (event.rawUrl) {
+    try {
+      const parsed = new URL(event.rawUrl);
+      path = parsed.pathname;
+    } catch {
+      // ignore
+    }
+  }
   const httpMethod = event.httpMethod;
 
   const headers = {

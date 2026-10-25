@@ -5,7 +5,7 @@
 
 [[redirects]]
   from = "/api/poster/*"
-  to = "/.netlify/functions/poster"
+  to = "/.netlify/functions/poster/:splat"
   status = 200
 
 [[redirects]]
