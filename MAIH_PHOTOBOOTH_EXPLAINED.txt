@@ -1,0 +1,114 @@
+================================================================================
+          MICROSOFT AI INNOVATORS HUB - AI PHOTO BOOTH
+                Complete Website & Features Guide
+================================================================================
+
+1. WHAT IS THIS WEBSITE?
+--------------------------------------------------------------------------------
+This website is a futuristic, sci-fi themed AI Photo Booth created for the 
+Microsoft AI Innovators Hub (MAIH) community events, workshops, and college 
+tech fests.
+
+It allows attendees to:
+1. Snap a photo of themselves using their smartphone or laptop camera.
+2. Automatically generate an Ultra-HD branded event poster featuring their photo 
+   inside a glowing neon cyberpunk frame with official community branding.
+3. Instantly download the poster directly to their phone by scanning a QR code 
+   (works on any phone over 4G/5G mobile data or Wi-Fi).
+
+
+2. THE 3-STEP FLOW FOR GUESTS / ATTENDEES
+--------------------------------------------------------------------------------
+Using the photo booth takes less than 30 seconds:
+
+  STEP 1: SETUP & CUSTOMIZATION
+  - Displays the community logo and customizable Event Name (e.g., "AI SUMMIT 2026").
+  - Lets you pick group size (1 to 4 people).
+  - Organizer can optionally select a folder on their laptop to automatically 
+    save high-resolution copies of every photo.
+
+  STEP 2: CAMERA CAPTURE
+  - Works with laptop webcams as well as mobile front/selfie and back cameras.
+  - On phones, tap "Flip Camera" to easily toggle between front and rear cameras.
+  - Features an intuitive 3-second countdown timer with visual flash so everyone 
+    is smiling and ready.
+  - Also includes a "Upload Photo" button if someone wants to use a picture 
+    already saved in their phone's gallery.
+
+  STEP 3: POSTER GENERATION & QR DOWNLOAD
+  - The photo is instantly rendered into an Ultra-HD 2K poster (1446 x 2048 px).
+  - The attendee sees their live poster preview.
+  - A QR code appears on screen. When scanned with any iPhone or Android camera, 
+    the poster downloads directly into their phone's downloads / photo roll!
+  - Attendees can also tap "Download PNG" on laptop or "Save / Share" on phone.
+
+
+3. KEY FEATURES EXPLAINED IN SIMPLE WORDS
+--------------------------------------------------------------------------------
+
+✦ 1. WORKS ON ALL DEVICES (LAPTOPS, TABLETS & SMARTPHONES)
+     You can run the main booth on a laptop or large display screen, or attendees 
+     can open the website on their own mobile phones. Clicking "📱 Open on Phone" 
+     in the header shows a QR code that opens the full photo booth on any phone.
+
+✦ 2. ULTRA-HD 2K CRISP POSTER QUALITY
+     Unlike standard web photo booths that produce blurry images, this booth uses 
+     a 2x high-resolution canvas engine (1446 x 2048 pixels) with proper hexagonal 
+     face framing, neon glow accents, and razor-sharp text.
+
+✦ 3. INSTANT 1-SCAN QR CODE DOWNLOAD (NO SAME WI-FI NEEDED!)
+     Attendees do NOT need to connect to the organizer's Wi-Fi or hotspot. 
+     The system generates a direct public download link. When an attendee points 
+     their phone camera at the QR code, their poster downloads immediately over 
+     normal 4G / 5G mobile data.
+
+✦ 4. COMPLETE PRIVACY (GUEST VS. ADMIN PROTECTION)
+     - GUESTS (ATTENDEES):
+       Guests can only take their own photo and download their own poster. 
+       All admin buttons, photo counters, and photo galleries are hidden from guests. 
+       Attendees can never see or access anyone else's photos.
+     - ORGANIZER (ADMIN):
+       Only you have access to view all photos. Protected by a secret PIN (maih2026).
+       When you log in, you get access to the Live Admin Gallery.
+
+✦ 5. REAL-TIME ADMIN GALLERY & BATCH ZIP DOWNLOAD
+     - Organizer can view all photos captured across all devices in real-time.
+     - Fullscreen Lightbox: Tap any photo to inspect it in full HD resolution.
+     - "📦 Download All (ZIP)": One-click button to download all attendee photos 
+       as a single ZIP file for event recaps, social media posts, and reports.
+     - Search & Delete tools to filter by time or remove test photos.
+
+✦ 6. BEAUTIFUL TEAM PORTAL BACKDROP
+     The landing page features a transparent community spotlight backdrop of the 
+     MAIH organizing team that fades smoothly into the deep sci-fi navy background.
+
+✦ 7. DUAL ARCHIVE (LOCAL DISK + CLOUD)
+     - On the host laptop: Automatically archives all full-resolution PNG posters 
+       into a dedicated folder named "AI Innovators Hub Posters".
+     - In the cloud: Stores posters securely in Netlify Blobs so attendees can 
+       download their posters from anywhere at any time.
+
+
+4. DEFAULT SETTINGS & QUICK ACCESS
+--------------------------------------------------------------------------------
+- Live Public Website: https://maih-photobooth.netlify.app
+- Local Laptop Server: http://localhost:5173
+- Default Admin PIN:   maih2026
+
+How to access Admin Gallery as Organizer:
+1. Open the website on any device (phone or laptop).
+2. Click "🔒 Admin" in the top-right header (or "🔒 Organizer Login" at bottom footer).
+3. Type the secret PIN: maih2026 and click Unlock.
+4. The "🖼️ Photos" button will appear with the total count. Tap it to browse, 
+   view, and download all attendee posters!
+
+
+5. RECOMMENDED EVENT SETUP
+--------------------------------------------------------------------------------
+- Set up a laptop at your event registration desk or booth table.
+- Open http://localhost:5173 (or https://maih-photobooth.netlify.app).
+- Click "📱 Open on Phone" and display the QR code on a sign or second screen 
+  so walk-in attendees can open the photo booth on their own phones.
+- At the end of the event, click "🖼️ Photos" -> "📦 Download All (ZIP)" to save 
+  all attendee posters in one archive!
+================================================================================
